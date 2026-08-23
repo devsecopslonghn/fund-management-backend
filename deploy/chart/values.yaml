@@ -1,0 +1,14 @@
+# The deployment is intentionally omitted until the CI/CD pipeline publishes
+# an immutable image tag into this application repository.
+image:
+  repository: nexus.apps.drgdevlab.com/fund-management/backend
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecret: nexus-registry
+runtimeSecret: fund-management-runtime
+adminSecret: fund-management-admin
+replicas: 1
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: 500m, memory: 768Mi}

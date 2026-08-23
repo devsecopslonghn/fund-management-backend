@@ -25,9 +25,10 @@ ciPipeline(
 cdPipeline(
     strategy: 'gitops',
     application: 'fund-management-backend',
-    // Existing Jenkins CD profile for the shared dev GitOps target. The
-    // component-specific valuesFile below is the deployment boundary.
+    // Existing Jenkins CD profile supplies the trusted Git credential and
+    // target branch. The chart and image tag remain in this repository.
     deploymentProfile: 'card-credit-dev',
-    valuesFile: 'fund-management-backend/values.yaml',
+    gitopsRepository: 'scm',
+    valuesFile: 'deploy/chart/values.yaml',
     variables: [imageTag: env.IMAGE_TAG]
 )
