@@ -1,0 +1,194 @@
+openapi: 3.0.3
+info:
+  title: Fund Management API
+  version: 1.0.0-mvp
+  description: |
+    Phase 1 API for the single-group fund. Money values are integer VND; public
+    responses never disclose individual financial amounts.
+servers:
+  - url: /api/v1
+tags:
+  - name: Public
+  - name: Personal
+  - name: Admin
+paths:
+  /public/overview:
+    get:
+      tags: [Public]
+      operationId: getPublicOverview
+      responses:
+        '200':
+          description: Aggregate fund status and non-sensitive member badges
+          content: { application/json: { schema: { $ref: '#/components/schemas/PublicOverview' } } }
+  /public/personal-link-requests:
+    post:
+      tags: [Public]
+      operationId: requestPersonalLink
+      description: Always returns 202 and never discloses whether the email exists. Delivery is Phase 2.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PersonalLinkRequest' } } } }
+      responses: { '202': { description: Generic accepted response, content: { application/json: { schema: { $ref: '#/components/schemas/Accepted' } } } } }
+  /me/{token}:
+    get:
+      tags: [Personal]
+      operationId: getPersonalOverview
+      parameters: [{ $ref: '#/components/parameters/MagicToken' }]
+      responses:
+        '200': { description: Personal dues overview, content: { application/json: { schema: { $ref: '#/components/schemas/PersonalOverview' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /me/{token}/payment-intents:
+    post:
+      tags: [Personal]
+      operationId: createPaymentIntent
+      parameters: [{ $ref: '#/components/parameters/MagicToken' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePaymentIntentRequest' } } } }
+      responses:
+        '201': { description: Durable pending payment intent, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentIntent' } } } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /me/{token}/payment-intents/{intentId}:
+    get:
+      tags: [Personal]
+      operationId: getPaymentIntent
+      parameters: [{ $ref: '#/components/parameters/MagicToken' }, { name: intentId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Payment intent status, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentIntent' } } } }
+  /admin/members:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listMembers
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200': { description: Admin member page, content: { application/json: { schema: { $ref: '#/components/schemas/MemberPage' } } } }
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: createMember
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/MemberUpsertRequest' } } } }
+      responses:
+        '201': { description: Member and one-time magic link, content: { application/json: { schema: { $ref: '#/components/schemas/CreatedMember' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/members/{memberId}:
+    put:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: updateMember
+      parameters: [{ name: memberId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/MemberUpsertRequest' } } } }
+      responses: { '200': { description: Updated member, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } } }
+    delete:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: deactivateMember
+      parameters: [{ name: memberId, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: Member soft-deactivated } }
+  /admin/members/{memberId}/magic-link:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: regenerateMagicLink
+      parameters: [{ name: memberId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: New one-time link value, content: { application/json: { schema: { $ref: '#/components/schemas/MagicLink' } } } } }
+  /admin/dues/generate:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: generateDuePeriods
+      parameters: [{ name: month, in: query, required: true, schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }]
+      responses: { '200': { description: Idempotent generation result, content: { application/json: { schema: { $ref: '#/components/schemas/GenerationResult' } } } } }
+  /admin/payments:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: recordManualPayment
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ManualPaymentRequest' } } } }
+      responses:
+        '201': { description: FIFO allocation result, content: { application/json: { schema: { $ref: '#/components/schemas/ManualPayment' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/expenses:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listExpenses
+      parameters: [{ name: from, in: query, schema: { type: string, format: date } }, { name: to, in: query, schema: { type: string, format: date } }, { name: category, in: query, schema: { type: string } }]
+      responses: { '200': { description: Expenses, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Expense' } } } } } }
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: createExpense
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpenseRequest' } } } }
+      responses: { '201': { description: Expense, content: { application/json: { schema: { $ref: '#/components/schemas/Expense' } } } } }
+  /admin/expenses/{expenseId}:
+    put:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: updateExpense
+      parameters: [{ name: expenseId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpenseRequest' } } } }
+      responses: { '200': { description: Expense, content: { application/json: { schema: { $ref: '#/components/schemas/Expense' } } } } }
+    delete:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: deleteExpense
+      parameters: [{ name: expenseId, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: Soft-deleted expense } }
+  /admin/dashboard:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getAdminDashboard
+      responses: { '200': { description: Dashboard including private late-payer data, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } } }
+  /admin/statistics:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getStatistics
+      responses: { '200': { description: MVP dashboard series; fuller reports/export are later phases, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } } }
+  /admin/settings:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getSettings
+      responses: { '501': { description: Planned for Phase 2; settings remain deployment configuration in MVP } }
+    put:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: updateSettings
+      responses: { '501': { description: Planned for Phase 2; settings remain deployment configuration in MVP } }
+  /admin/reconciliation/review:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listReconciliationReviewQueue
+      responses: { '501': { description: "Phase 2: email ingestion and reconciliation are not enabled in MVP" } }
+components:
+  securitySchemes: { basicAuth: { type: http, scheme: basic } }
+  parameters:
+    MagicToken: { name: token, in: path, required: true, schema: { type: string, minLength: 32 }, description: Non-guessable bearer-like link value; never log or persist client-side. }
+  responses:
+    ValidationError: { description: Invalid request }
+    Conflict: { description: Unique/business-key conflict }
+    NotFound: { description: Resource not found }
+  schemas:
+    PublicOverview: { type: object, required: [balance, members], properties: { balance: { type: integer, format: int64, description: Aggregate VND only }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, members: { type: array, items: { $ref: '#/components/schemas/PublicMemberStatus' } } } }
+    PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
+    PersonalOverview: { type: object, properties: { member: { $ref: '#/components/schemas/PersonalMember' }, totalPaid: { type: integer, format: int64 }, totalOwed: { type: integer, format: int64 }, duePeriods: { type: array, items: { $ref: '#/components/schemas/DuePeriod' } } } }
+    PersonalMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string } } }
+    DuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, notes: { type: string, nullable: true } } }
+    CreatePaymentIntentRequest: { type: object, required: [duePeriodIds], properties: { duePeriodIds: { type: array, minItems: 1, items: { type: string } } } }
+    PaymentIntent: { type: object, properties: { id: { type: string }, amount: { type: integer, format: int64 }, transferContent: { type: string }, qrImageUrl: { type: string, format: uri }, accountHolder: { type: string }, accountNumber: { type: string }, bankName: { type: string }, expiresAt: { type: string, format: date-time }, status: { type: string, enum: [PENDING, FULFILLED, EXPIRED] } } }
+    MemberUpsertRequest: { type: object, required: [memberCode, fullName, email, joinMonth, contributionAmount], properties: { memberCode: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' }, fullName: { type: string }, email: { type: string, format: email }, phone: { type: string }, joinMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, baselineMonth: { type: string, nullable: true }, contributionAmount: { type: integer, format: int64, minimum: 1 }, status: { type: string, enum: [ACTIVE, PAUSED, LEFT] } } }
+    Member: { type: object, properties: { id: { type: string }, memberCode: { type: string }, fullName: { type: string }, email: { type: string }, phone: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, status: { type: string }, contributionAmount: { type: integer, format: int64 } } }
+    CreatedMember: { allOf: [{ $ref: '#/components/schemas/Member' }, { type: object, properties: { magicLink: { type: string, description: Returned only at create/regenerate; treat as secret. } } }] }
+    MemberPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/Member' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
+    MagicLink: { type: object, properties: { magicLink: { type: string } } }
+    GenerationResult: { type: object, properties: { month: { type: string }, created: { type: integer }, skipped: { type: integer } } }
+    ManualPaymentRequest: { type: object, required: [memberId, amount, occurredAt, idempotencyKey], properties: { memberId: { type: string }, amount: { type: integer, format: int64, minimum: 1 }, occurredAt: { type: string, format: date-time }, idempotencyKey: { type: string, minLength: 16, maxLength: 128 }, note: { type: string, maxLength: 500 } } }
+    ManualPayment: { type: object, properties: { id: { type: string }, memberId: { type: string }, amount: { type: integer, format: int64 }, unallocatedAmount: { type: integer, format: int64 }, allocations: { type: array, items: { type: object, properties: { duePeriodId: { type: string }, amount: { type: integer, format: int64 } } } } } }
+    ExpenseRequest: { type: object, required: [date, amount, purpose], properties: { date: { type: string, format: date }, amount: { type: integer, format: int64, minimum: 1 }, purpose: { type: string, maxLength: 500 }, category: { type: string, maxLength: 64 }, requestedBy: { type: string, maxLength: 120 }, notes: { type: string, maxLength: 1000 } } }
+    Expense: { allOf: [{ $ref: '#/components/schemas/ExpenseRequest' }, { type: object, properties: { id: { type: string }, createdAt: { type: string, format: date-time }, updatedAt: { type: string, format: date-time } } }] }
+    Dashboard: { type: object, properties: { balance: { type: integer, format: int64 }, totalIncome: { type: integer, format: int64 }, totalExpense: { type: integer, format: int64 }, currentMonthCompliancePercent: { type: integer }, reviewCount: { type: integer, description: Always zero in Phase 1 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, latePayers: { type: array, items: { $ref: '#/components/schemas/Member' } } } }
+    MonthlySeries: { type: object, properties: { month: { type: string }, income: { type: integer, format: int64 }, expense: { type: integer, format: int64 } } }
+    PersonalLinkRequest: { type: object, required: [email], properties: { email: { type: string, format: email } } }
+    Accepted: { type: object, properties: { message: { type: string } } }
