@@ -10,10 +10,9 @@ runtimeSecret: fund-management-runtime
 adminSecret: fund-management-admin
 replicas: 1
 scheduling:
-  # Temporary availability guard: this node is verified to reach the managed
-  # MongoDB cluster over DNS/TLS. Remove after egress is repaired cluster-wide.
-  nodeSelector:
-    kubernetes.io/hostname: eztechvn2
+  # Empty by default: the backend may run on any schedulable cluster node.
+  # Set selectors only for an intentional maintenance or incident constraint.
+  nodeSelector: {}
 resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {cpu: 500m, memory: 768Mi}

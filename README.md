@@ -434,7 +434,7 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 - `/healthz` endpoint per service for liveness/readiness probes.
 - Production SPA requests **must** use the relative same-origin `/api/v1` base path. The browser must never receive a Kubernetes `*.svc` address or a direct/public backend host; only the in-cluster Nginx proxy resolves the backend Service FQDN.
 - Nginx must use bounded upstream connect/read timeouts and return a gateway failure promptly when no backend endpoint is ready. The UI must distinguish that unavailable state from a valid "member not found" result.
-- The backend rollout is eligible only on nodes with verified DNS/TLS egress to the managed MongoDB cluster. Until egress is fixed cluster-wide, its Helm workload pins to the verified node and uses a single replica; remove that constraint only after a two-node connectivity test passes.
+- The backend may schedule on every eligible node. DNS/TLS egress to the managed MongoDB cluster is an operational prerequisite verified before rollouts; use a temporary Helm node selector only during a diagnosed infrastructure incident.
 - Centralized logging via Fluentd/OTel Collector → Elasticsearch/Kibana (reusing prior experience with the Jenkins/GitLab logging pipeline).
 
 ### 8.4 Repository & Documentation Strategy (Two Repos)
@@ -525,7 +525,7 @@ Remaining before MVP can be considered operationally complete:
 
 - Finish Admin expense create/edit/delete UI and its end-to-end verification (Module C is not yet fully delivered).
 - Run monthly due generation as an idempotent scheduled job, expose its result to Admin, and test it against imported members/rates.
-- Restore backend availability on every schedulable node by fixing managed-MongoDB DNS/TLS egress; then add a PodDisruptionBudget and ≥2 backend replicas.
+- Add a PodDisruptionBudget and ≥2 backend replicas after confirming the managed-MongoDB DNS/TLS connectivity test on at least two schedulable nodes.
 - Automate daily MongoDB backups and execute a documented restore test.
 - Publish/validate the versioned OpenAPI contract in CI, then add browser-level integration tests for the public payer and Admin member flows.
 
