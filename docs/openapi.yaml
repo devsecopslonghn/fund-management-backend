@@ -217,9 +217,16 @@ paths:
     get:
       tags: [Admin]
       operationId: completeGmailOAuth
-      description: Public browser redirect target; state is cryptographically random, hashed, short-lived, and atomically consumed once.
+      description: Public browser redirect target; state is cryptographically random, hashed, short-lived, and atomically consumed once. On completion the server returns 302 to the configured frontend origin with generic gmailOAuth=connected|failed.
       parameters: [{ name: state, in: query, required: false, schema: { type: string } }, { name: code, in: query, required: false, schema: { type: string } }, { name: error, in: query, required: false, schema: { type: string } }]
-      responses: { '200': { description: Generic OAuth result, content: { application/json: { schema: { $ref: '#/components/schemas/GmailOAuthCallback' } } } } }
+      responses: { '302': { description: Generic frontend redirect, headers: { Location: { schema: { type: string, format: uri } } } } }
+  /admin/integrations/gmail/oauth/callback:
+    get:
+      tags: [Admin]
+      operationId: completeGmailOAuthRegisteredRedirect
+      description: Compatibility callback for the registered Google web-client URI. Same one-time state validation and generic 302 frontend redirect as the canonical callback.
+      parameters: [{ name: state, in: query, required: false, schema: { type: string } }, { name: code, in: query, required: false, schema: { type: string } }, { name: error, in: query, required: false, schema: { type: string } }]
+      responses: { '302': { description: Generic frontend redirect, headers: { Location: { schema: { type: string, format: uri } } } } }
   /admin/gmail/oauth/status:
     get:
       tags: [Admin]

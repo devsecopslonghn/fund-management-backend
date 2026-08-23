@@ -57,6 +57,15 @@ public class GmailOAuthService {
     return new ApiDtos.GmailOAuthCallbackResponse(true, "Gmail read-only connection established");
   }
 
+  /** Redirects only to the origin of the configured OAuth redirect URI; never to a caller-supplied URL. */
+  public URI frontendCallbackRedirect(boolean connected) {
+    try {
+      URI configured = URI.create(properties.getRedirectUri());
+      if (configured.getScheme() == null || configured.getRawAuthority() == null) throw new IllegalStateException("OAuth redirect URI is invalid");
+      return URI.create(configured.getScheme() + "://" + configured.getRawAuthority() + "/?gmailOAuth=" + (connected ? "connected" : "failed"));
+    } catch (IllegalArgumentException ex) { throw new IllegalStateException("OAuth redirect URI is invalid", ex); }
+  }
+
   public ApiDtos.GmailOAuthStatusResponse status() {
     boolean configured = isConfigured(); var credential = credentials.findById(CREDENTIAL_ID);
     return new ApiDtos.GmailOAuthStatusResponse(configured, configured && credential.isPresent(), properties.getMonitoredMailbox(), properties.getSenderFilter(), credential.map(c -> c.connectedAt).orElse(null), configured ? "gmail-read-only" : "disabled");

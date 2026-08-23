@@ -12,5 +12,5 @@ public class GmailPollingWorker {
   private final MailboxIngestionPort mailbox; private final IngestionService ingestion;
   public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion) { this.mailbox = mailbox; this.ingestion = ingestion; }
   @Scheduled(fixedDelayString = "${FUND_GMAIL_POLL_INTERVAL_MS:180000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
-  public void poll() { for (MailboxIngestionPort.MailboxMessage message : mailbox.fetchUnreadSacombankMessages()) ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); }
+  public void poll() { for (MailboxIngestionPort.MailboxMessage message : mailbox.fetchUnreadSacombankMessages()) { try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); } catch (RuntimeException ignored) { /* Continue safely; provider IDs make retries idempotent. */ } } }
 }
