@@ -4,6 +4,7 @@ spring:
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/fund_management}
+      database: ${MONGODB_DATABASE:fund_management}
       auto-index-creation: true
   jackson:
     default-property-inclusion: non_null
