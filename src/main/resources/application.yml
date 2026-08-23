@@ -16,6 +16,11 @@ management:
   endpoint:
     health:
       show-details: never
+logging:
+  level:
+    # The Mongo driver logs connection metadata, including account identifiers,
+    # at INFO. Keep that operational detail out of application logs.
+    org.mongodb.driver: WARN
 app:
   security:
     admin-username: ${APP_ADMIN_USERNAME:}
