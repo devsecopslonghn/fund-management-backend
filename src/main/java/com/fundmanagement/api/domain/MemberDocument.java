@@ -13,12 +13,13 @@ public class MemberDocument {
   @Id public String id;
   @Indexed(unique = true) public String memberCode;
   public String fullName;
+  /** Lower-case, whitespace-collapsed lookup key used by the anonymous payment flow. */
+  @Indexed public String normalizedFullName;
   public String email;
   public String phone;
   public String joinMonth;
   public String baselineMonth;
   public MemberStatus status;
-  @Indexed(unique = true, sparse = true) public String magicTokenHash;
   public List<ContributionRate> contributionRates = new ArrayList<>();
   public Instant createdAt;
   public Instant updatedAt;

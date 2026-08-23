@@ -1,10 +1,13 @@
 package com.fundmanagement.api.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 import com.fundmanagement.api.config.FundProperties;
+import com.fundmanagement.api.domain.DuePeriodDocument;
 import com.fundmanagement.api.domain.MemberDocument;
 import com.fundmanagement.api.domain.MemberStatus;
 import com.fundmanagement.api.dto.ApiDtos;
@@ -39,5 +42,54 @@ class DuesServiceTest {
     org.mockito.Mockito.verify(dues).save(captor.capture());
     assertThat(result.created()).isEqualTo(1); assertThat(result.skipped()).isEqualTo(1); assertThat(captor.getValue().memberId).isEqualTo("m-1"); assertThat(captor.getValue().amountDue).isEqualTo(200_000L);
   }
+  @Test void anonymousLookupRequiresMemberCodeWhenNamesCollide() {
+    MemberDocument first = member("m-1", "2026-07"); first.fullName = "Nguyễn Văn A"; first.memberCode = "A001";
+    MemberDocument second = member("m-2", "2026-07"); second.fullName = "  NGUYỄN   VĂN A "; second.memberCode = "A002";
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(first, second));
+    when(memberService.normalizeName(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class).trim().replaceAll("\\s+", " ").toLowerCase());
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+
+    ApiDtos.PublicPaymentOptionsResponse result = service.publicPaymentOptions(new ApiDtos.PublicPaymentOptionsRequest("Nguyễn Văn A", null));
+
+    assertThat(result.requiresMemberCode()).isTrue();
+    assertThat(result.matches()).extracting(ApiDtos.PublicMemberMatch::memberCode).containsExactly("A001", "A002");
+    assertThat(result.duePeriods()).isEmpty();
+  }
+
+  @Test void anonymousLookupReturnsOnlyOutstandingDuePeriods() {
+    MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
+    DuePeriodDocument unpaid = due("due-1", "2026-08", 100_000, 20_000);
+    DuePeriodDocument paid = due("due-2", "2026-07", 100_000, 100_000);
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(member));
+    when(memberService.normalizeName(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class).trim().replaceAll("\\s+", " ").toLowerCase());
+    when(dues.findByMemberIdOrderByMonthAsc("m-1")).thenReturn(List.of(paid, unpaid));
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+
+    ApiDtos.PublicPaymentOptionsResponse result = service.publicPaymentOptions(new ApiDtos.PublicPaymentOptionsRequest("Nguyễn Văn A", null));
+
+    assertThat(result.requiresMemberCode()).isFalse();
+    assertThat(result.duePeriods()).extracting(ApiDtos.PublicDuePeriodResponse::id).containsExactly("due-1");
+    assertThat(result.duePeriods().getFirst().outstandingAmount()).isEqualTo(80_000);
+  }
+
+  @Test void anonymousIntentUsesServerCalculatedAmountAndRejectsPaidPeriods() {
+    MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
+    DuePeriodDocument unpaid = due("due-1", "2026-08", 100_000, 20_000);
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(member));
+    when(memberService.normalizeName(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class).trim().replaceAll("\\s+", " ").toLowerCase());
+    when(dues.findByMemberIdAndIdIn("m-1", java.util.Set.of("due-1"))).thenReturn(List.of(unpaid));
+    FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("123456789"); properties.setAccountHolder("TEST FUND");
+    when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    DuesService service = new DuesService(members, dues, intents, memberService, properties);
+
+    ApiDtos.PublicPaymentIntentResponse result = service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
+
+    assertThat(result.amount()).isEqualTo(80_000);
+    assertThat(result.transferContent()).isEqualTo("QUY A001 082026");
+    assertThatThrownBy(() -> service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-2"))))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("invalid");
+  }
+
+  private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = paid >= due ? com.fundmanagement.api.domain.DueStatus.PAID : com.fundmanagement.api.domain.DueStatus.PARTIAL; return value; }
   private MemberDocument member(String id, String baseline) { MemberDocument member = new MemberDocument(); member.id = id; member.baselineMonth = baseline; member.status = MemberStatus.ACTIVE; return member; }
 }

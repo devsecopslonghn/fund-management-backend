@@ -51,20 +51,20 @@ logic.
   member ID, payment total, due-period ID, or visibility decision supplied by
   the client.
 - Public endpoints may return only aggregate data, member names, and high-level
-  status. They must never expose individual amounts, email, phone, tokens,
-  bank account details, raw transaction content, audit logs, or reconciliation
-  data.
-- Magic-link tokens require at least 128 bits of cryptographic entropy, are
-  unique and revocable/regenerable, and must not be logged or included in error
-  messages. Store them safely (prefer a keyed hash/derived lookup rather than
-  reversible plaintext when compatible with the design).
+  status. The anonymous payer endpoints may additionally return only the
+  selected member's currently payable periods, server-calculated total, QR,
+  fund transfer-account details and standardized transfer content. They must never expose email, phone, full
+  history, tokens, raw transaction content, audit logs, or reconciliation data.
+- Anonymous payer lookup is not authentication: match exact normalized names,
+  require member-code disambiguation for duplicate names, rate-limit and audit
+  lookup/intent creation, and return generic errors without leaking data.
 - Use least-privilege OAuth2 for Gmail; request read-only access and filter to
   the intended Sacombank sender and notification subject/label. Encrypt refresh
   tokens and sensitive account data at rest; use approved secret injection,
   never committed configuration or logs.
 - Authentication and role separation: Super Admin owns system/mailbox
   configuration; Admin handles day-to-day members, expenses, and transaction
-  review. Apply rate limiting to public and magic-link endpoints, restrictive
+  review. Apply rate limiting to public and anonymous-payer endpoints, restrictive
   CORS, input validation, and generic external errors.
 - Retain raw email payloads for the SRS-required period with access controls.
   Avoid putting raw payloads, personally identifiable information, bearer

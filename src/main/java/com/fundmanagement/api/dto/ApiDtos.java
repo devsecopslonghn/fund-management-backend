@@ -18,13 +18,17 @@ public final class ApiDtos {
   private ApiDtos() {}
   public record MemberUpsertRequest(@NotBlank @Pattern(regexp = "^[A-Za-z0-9_-]{2,32}$") String memberCode, @NotBlank @Size(max = 120) String fullName, @NotBlank @Email String email, @Size(max = 32) String phone, @NotBlank @Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-2])$") String joinMonth, @Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-2])$") String baselineMonth, @Min(1) long contributionAmount, MemberStatus status) {}
   public record MemberResponse(String id, String memberCode, String fullName, String email, String phone, String joinMonth, String baselineMonth, MemberStatus status, long contributionAmount) {}
-  public record CreatedMemberResponse(String id, String memberCode, String fullName, String email, String phone, String joinMonth, String baselineMonth, MemberStatus status, long contributionAmount, String magicLink) {}
-  public record MagicLinkResponse(String magicLink) {}
+  public record CreatedMemberResponse(String id, String memberCode, String fullName, String email, String phone, String joinMonth, String baselineMonth, MemberStatus status, long contributionAmount) {}
   public record MemberPageResponse(List<MemberResponse> content, int page, int size, long totalElements) {}
   public record DuePeriodResponse(String id, String month, long amountDue, long amountPaid, DueStatus status, String notes) {}
-  public record PersonalMemberResponse(String id, String fullName, String memberCode) {}
-  public record PersonalOverviewResponse(PersonalMemberResponse member, long totalPaid, long totalOwed, List<DuePeriodResponse> duePeriods) {}
-  public record CreatePaymentIntentRequest(@NotEmpty List<@NotBlank String> duePeriodIds) {}
+  /** Public response deliberately contains only the outstanding amount, never paid totals or history. */
+  public record PublicDuePeriodResponse(String id, String month, long outstandingAmount) {}
+  public record PublicMemberMatch(String fullName, String memberCode) {}
+  public record PublicPaymentOptionsResponse(boolean requiresMemberCode, List<PublicMemberMatch> matches, List<PublicDuePeriodResponse> duePeriods) {}
+  public record PublicPaymentOptionsRequest(@NotBlank @Size(max = 120) String fullName, @Pattern(regexp = "^[A-Za-z0-9_-]{2,32}$") String memberCode) {}
+  public record PublicPaymentIntentRequest(@NotBlank @Size(max = 120) String fullName, @Pattern(regexp = "^[A-Za-z0-9_-]{2,32}$") String memberCode, @NotEmpty List<@NotBlank String> duePeriodIds) {}
+  /** Public payment response includes fund transfer details but never member identity or history. */
+  public record PublicPaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   public record PaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   public record GenerationResult(String month, int created, int skipped) {}
   public record ManualPaymentRequest(@NotBlank String memberId, @Min(1) long amount, @NotNull Instant occurredAt, @NotBlank @Size(min = 16, max = 128) String idempotencyKey, @Size(max = 500) String note) {}
@@ -36,8 +40,6 @@ public final class ApiDtos {
   public record MonthlySeriesResponse(String month, long income, long expense) {}
   public record PublicOverviewResponse(long balance, long incomeThisMonth, long expenseThisMonth, int currentMonthCompliancePercent, List<MonthlySeriesResponse> monthlySeries, List<PublicMemberStatus> members) {}
   public record DashboardResponse(long balance, long totalIncome, long totalExpense, int currentMonthCompliancePercent, long reviewCount, List<MonthlySeriesResponse> monthlySeries, List<MemberResponse> latePayers) {}
-  public record PersonalLinkRequest(@NotBlank @Email String email) {}
-  public record AcceptedResponse(String message) {}
   public record SettingsResponse(long defaultContributionAmount, double autoReconciliationThreshold, String bankName, String bankCode, String accountNumber, String accountHolder) {}
   public record SettingsRequest(@Min(1) long defaultContributionAmount, @Min(0) double autoReconciliationThreshold, @NotBlank String bankName, @NotBlank String bankCode, @NotBlank String accountNumber, @NotBlank String accountHolder) {}
 }

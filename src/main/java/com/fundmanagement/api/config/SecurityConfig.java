@@ -21,7 +21,7 @@ public class SecurityConfig {
   @Bean
   SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
     return http.csrf(csrf -> csrf.disable()).cors(Customizer.withDefaults()).httpBasic(Customizer.withDefaults())
-        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/api/v1/me/**", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll().requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
+        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll().requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
   }
 
   @Bean

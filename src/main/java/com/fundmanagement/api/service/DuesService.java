@@ -18,13 +18,18 @@ import java.time.YearMonth;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DuesService {
-  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties;
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; }
+  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit;
+  /** Test-friendly constructor; production uses the audited constructor below. */
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null); }
+  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
@@ -33,17 +38,46 @@ public class DuesService {
     }
     return new ApiDtos.GenerationResult(month, created, skipped);
   }
-  public ApiDtos.PersonalOverviewResponse personalOverview(String rawToken) {
-    MemberDocument member = memberService.fromToken(rawToken); List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(member.id); long paid = periods.stream().mapToLong(p -> p.amountPaid).sum(); long owed = periods.stream().mapToLong(p -> Math.max(0, p.amountDue - p.amountPaid)).sum();
-    return new ApiDtos.PersonalOverviewResponse(new ApiDtos.PersonalMemberResponse(member.id, member.fullName, member.memberCode), paid, owed, periods.stream().map(this::toResponse).toList());
+  /** Resolve an anonymous payer by normalized name; a member code is mandatory for collisions. */
+  public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptions(ApiDtos.PublicPaymentOptionsRequest request) {
+    List<MemberDocument> matches = matchingPublicMembers(request.fullName());
+    if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
+    if (isBlank(request.memberCode()) && matches.size() > 1) {
+      return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
+    }
+    MemberDocument member = resolvePublicMember(matches, request.memberCode());
+    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
+    recordAudit("PUBLIC_PAYMENT_LOOKUP", member.id);
+    return new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch(member.fullName, isBlank(request.memberCode()) ? null : member.memberCode)), payable);
   }
-  public ApiDtos.PaymentIntentResponse createIntent(String rawToken, ApiDtos.CreatePaymentIntentRequest request) {
-    MemberDocument member = memberService.fromToken(rawToken); Set<String> requested = new HashSet<>(request.duePeriodIds()); if (requested.size() != request.duePeriodIds().size()) throw new IllegalArgumentException("Due periods must not be duplicated");
-    List<DuePeriodDocument> periods = dues.findByMemberIdAndIdIn(member.id, requested); if (periods.size() != requested.size()) throw new IllegalArgumentException("One or more due periods are invalid"); long amount = periods.stream().mapToLong(p -> Math.max(0, p.amountDue - p.amountPaid)).sum(); if (amount <= 0) throw new IllegalArgumentException("Selected periods have no outstanding balance");
-    String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow(); PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().map(p -> p.id).toList(); intent.totalAmount = amount; intent.transferContent = "QUY " + member.memberCode + " " + month.substring(5, 7) + month.substring(0, 4); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent); return toResponse(intent);
+
+  /** Creates a server-priced, expiring intent without requiring a member login. */
+  public ApiDtos.PublicPaymentIntentResponse createPublicIntent(ApiDtos.PublicPaymentIntentRequest request) {
+    List<MemberDocument> matches = matchingPublicMembers(request.fullName());
+    if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
+    MemberDocument member = resolvePublicMember(matches, request.memberCode());
+    Set<String> requested = new HashSet<>(request.duePeriodIds());
+    if (requested.size() != request.duePeriodIds().size()) throw new IllegalArgumentException("Due periods must not be duplicated");
+    List<DuePeriodDocument> periods = dues.findByMemberIdAndIdIn(member.id, requested);
+    if (periods.size() != requested.size()) throw new IllegalArgumentException("One or more due periods are invalid");
+    long amount = 0;
+    for (DuePeriodDocument period : periods) {
+      long outstanding = outstanding(period);
+      if (outstanding <= 0) throw new IllegalArgumentException("Selected periods have no outstanding balance");
+      try { amount = Math.addExact(amount, outstanding); } catch (ArithmeticException ex) { throw new IllegalArgumentException("Payment amount is too large"); }
+    }
+    String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow();
+    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().map(p -> p.id).toList(); intent.totalAmount = amount; intent.transferContent = "QUY " + member.memberCode + " " + month.substring(5, 7) + month.substring(0, 4); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
+    recordAudit("PUBLIC_PAYMENT_INTENT_CREATED", member.id);
+    return toPublicResponse(intent);
   }
-  public ApiDtos.PaymentIntentResponse getIntent(String rawToken, String intentId) { MemberDocument member = memberService.fromToken(rawToken); PaymentIntentDocument intent = intents.findByIdAndMemberId(intentId, member.id).orElseThrow(() -> new IllegalArgumentException("Payment intent not found")); if (intent.status == IntentStatus.PENDING && Instant.now().isAfter(intent.expiresAt)) { intent.status = IntentStatus.EXPIRED; intents.save(intent); } return toResponse(intent); }
   public ApiDtos.DuePeriodResponse toResponse(DuePeriodDocument p) { return new ApiDtos.DuePeriodResponse(p.id, p.month, p.amountDue, p.amountPaid, p.status, p.notes); }
-  private ApiDtos.PaymentIntentResponse toResponse(PaymentIntentDocument intent) { String url = properties.getQrImageBaseUrl() + "/" + properties.getBankCode() + "-" + properties.getAccountNumber() + "-compact2.png?amount=" + intent.totalAmount + "&addInfo=" + URLEncoder.encode(intent.transferContent, StandardCharsets.UTF_8) + "&accountName=" + URLEncoder.encode(properties.getAccountHolder(), StandardCharsets.UTF_8); return new ApiDtos.PaymentIntentResponse(intent.id, intent.totalAmount, intent.transferContent, url, properties.getAccountHolder(), properties.getAccountNumber(), properties.getBankName(), intent.expiresAt, intent.status); }
+  private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }
+  private boolean hasOutstanding(DuePeriodDocument period) { return outstanding(period) > 0; }
+  private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }
+  private MemberDocument resolvePublicMember(List<MemberDocument> matches, String memberCode) { if (matches.size() > 1 && isBlank(memberCode)) throw new IllegalArgumentException("Member code is required for duplicate names"); String normalizedCode = isBlank(memberCode) ? null : memberCode.trim().toUpperCase(Locale.ROOT); return matches.stream().filter(m -> normalizedCode == null || normalizedCode.equals(m.memberCode)).findFirst().orElseThrow(() -> new IllegalArgumentException("No matching member found")); }
+  private boolean isBlank(String value) { return value == null || value.isBlank(); }
+  private void recordAudit(String action, String memberId) { if (audit != null) audit.record("anonymous", action, "member", memberId, Map.of(), Map.of()); }
+  private ApiDtos.PublicPaymentIntentResponse toPublicResponse(PaymentIntentDocument intent) { String url = properties.getQrImageBaseUrl() + "/" + properties.getBankCode() + "-" + properties.getAccountNumber() + "-compact2.png?amount=" + intent.totalAmount + "&addInfo=" + URLEncoder.encode(intent.transferContent, StandardCharsets.UTF_8) + "&accountName=" + URLEncoder.encode(properties.getAccountHolder(), StandardCharsets.UTF_8); return new ApiDtos.PublicPaymentIntentResponse(intent.id, intent.totalAmount, intent.transferContent, url, properties.getAccountHolder(), properties.getAccountNumber(), properties.getBankName(), intent.expiresAt, intent.status); }
   private void parseMonth(String month) { try { YearMonth.parse(month); } catch (RuntimeException ex) { throw new IllegalArgumentException("Month must be YYYY-MM"); } }
 }

@@ -16,7 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 public class RateLimitFilter extends OncePerRequestFilter {
   private final Map<String, Window> windows = new ConcurrentHashMap<>();
-  @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !request.getRequestURI().matches(".*/api/v1/(public|me)/.*"); }
+  @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !request.getRequestURI().matches(".*/api/v1/public/.*"); }
   @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
     String key = request.getRemoteAddr(); Window window = windows.computeIfAbsent(key, ignored -> new Window());
     synchronized (window) { long now = Instant.now().getEpochSecond(); if (now - window.startedAt >= 60) { window.startedAt = now; window.count = 0; } if (++window.count > 60) { response.sendError(HttpStatus.TOO_MANY_REQUESTS.value(), "Too many requests"); return; } }
