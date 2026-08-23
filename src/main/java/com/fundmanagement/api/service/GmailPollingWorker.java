@@ -3,6 +3,7 @@ package com.fundmanagement.api.service;
 import com.fundmanagement.api.config.GmailProperties;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -13,7 +14,7 @@ public class GmailPollingWorker {
   private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow;
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
   public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null); }
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; }
+  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; }
   @Scheduled(fixedDelayString = "${FUND_GMAIL_POLL_INTERVAL_MS:180000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
   public void poll() {
     if (detectionWindow != null && safeWindowActive()) return;
