@@ -25,7 +25,9 @@ ciPipeline(
 cdPipeline(
     strategy: 'gitops',
     application: 'fund-management-backend',
-    deploymentProfile: 'fund-management-backend-dev',
+    // Existing Jenkins CD profile for the shared dev GitOps target. The
+    // component-specific valuesFile below is the deployment boundary.
+    deploymentProfile: 'card-credit-dev',
     valuesFile: 'fund-management-backend/values.yaml',
     variables: [imageTag: env.IMAGE_TAG]
 )
