@@ -12,7 +12,7 @@ class OpenApiContractTest {
     java.nio.file.Path path = java.nio.file.Path.of("docs/openapi.yaml");
     if (!java.nio.file.Files.exists(path)) return;
     String spec = java.nio.file.Files.readString(path, StandardCharsets.UTF_8);
-    assertThat(spec).contains("version: 1.1.0", "/admin/dues", "/admin/settings", "/admin/audit-logs", "/admin/reconciliation/{transactionId}/review");
+    assertThat(spec).contains("version: 1.1.0", "/admin/dues", "/admin/settings", "/admin/audit-logs", "/admin/reconciliation/{transactionId}/review", "/admin/gmail/oauth/start", "/admin/gmail/oauth/callback");
     assertThat(spec).doesNotContain("smtpPassword", "oauthToken");
   }
 }

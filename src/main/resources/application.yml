@@ -51,3 +51,16 @@ app:
     startup-catch-up-enabled: ${FUND_STARTUP_CATCH_UP_ENABLED:false}
   migration:
     apply-enabled: ${FUND_LEGACY_MIGRATION_APPLY_ENABLED:false}
+  gmail:
+    enabled: ${FUND_GMAIL_ENABLED:false}
+    polling-enabled: ${FUND_GMAIL_POLLING_ENABLED:false}
+    client-id: ${FUND_GMAIL_OAUTH_CLIENT_ID:}
+    client-secret: ${FUND_GMAIL_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${FUND_GMAIL_OAUTH_REDIRECT_URI:}
+    token-encryption-key: ${FUND_GMAIL_TOKEN_ENCRYPTION_KEY:}
+    monitored-mailbox: ${FUND_GMAIL_MONITORED_ADDRESS:}
+    sender-filter: ${FUND_GMAIL_SENDER_FILTER:info@sacombank.com.vn}
+    state-ttl-seconds: ${FUND_GMAIL_OAUTH_STATE_TTL_SECONDS:600}
+    authorize-endpoint: ${FUND_GMAIL_OAUTH_AUTHORIZE_ENDPOINT:https://accounts.google.com/o/oauth2/v2/auth}
+    token-endpoint: ${FUND_GMAIL_OAUTH_TOKEN_ENDPOINT:https://oauth2.googleapis.com/token}
+    api-base-url: ${FUND_GMAIL_API_BASE_URL:https://gmail.googleapis.com/gmail/v1}

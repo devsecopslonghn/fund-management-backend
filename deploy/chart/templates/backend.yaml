@@ -44,6 +44,11 @@ spec:
           envFrom:
             - secretRef: {name: {{ .Values.runtimeSecret }}}
             - secretRef: {name: {{ .Values.adminSecret }}}
+          # Optional keys in runtimeSecret (never committed here):
+          # FUND_GMAIL_OAUTH_CLIENT_ID, FUND_GMAIL_OAUTH_CLIENT_SECRET,
+          # FUND_GMAIL_OAUTH_REDIRECT_URI, FUND_GMAIL_TOKEN_ENCRYPTION_KEY,
+          # FUND_GMAIL_MONITORED_ADDRESS. Gmail remains disabled unless
+          # FUND_GMAIL_ENABLED/FUND_GMAIL_POLLING_ENABLED are explicitly true.
           env:
             - {name: MONGODB_DATABASE, value: fund_management}
             - {name: APP_ALLOWED_ORIGINS, value: https://quybpdev.apps.drgdevlab.com}

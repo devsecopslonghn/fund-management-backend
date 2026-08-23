@@ -206,6 +206,32 @@ paths:
       security: [{ basicAuth: [] }]
       operationId: getIngestionStatus
       responses: { '200': { description: Feature and provider status, content: { application/json: { schema: { $ref: '#/components/schemas/IngestionStatus' } } } } }
+  /admin/gmail/oauth/start:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: startGmailOAuth
+      description: SUPER_ADMIN only. Starts short-lived one-time state authorization with Gmail readonly scope and PKCE S256.
+      responses: { '200': { description: Authorization URL, content: { application/json: { schema: { $ref: '#/components/schemas/GmailOAuthStart' } } } } }
+  /admin/gmail/oauth/callback:
+    get:
+      tags: [Admin]
+      operationId: completeGmailOAuth
+      description: Public browser redirect target; state is cryptographically random, hashed, short-lived, and atomically consumed once.
+      parameters: [{ name: state, in: query, required: false, schema: { type: string } }, { name: code, in: query, required: false, schema: { type: string } }, { name: error, in: query, required: false, schema: { type: string } }]
+      responses: { '200': { description: Generic OAuth result, content: { application/json: { schema: { $ref: '#/components/schemas/GmailOAuthCallback' } } } } }
+  /admin/gmail/oauth/status:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getGmailOAuthStatus
+      responses: { '200': { description: Connection status without tokens, content: { application/json: { schema: { $ref: '#/components/schemas/GmailOAuthStatus' } } } } }
+  /admin/gmail/oauth/disconnect:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: disconnectGmailOAuth
+      responses: { '204': { description: Encrypted credential removed } }
   /admin/reconciliation/ingest:
     post:
       tags: [Admin]
@@ -276,5 +302,8 @@ components:
     ReconciliationPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/BankTransaction' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
     ReconciliationReviewRequest: { type: object, required: [ignore], properties: { ignore: { type: boolean }, memberId: { type: string }, note: { type: string, maxLength: 500 } } }
     IngestionStatus: { type: object, properties: { enabled: { type: boolean }, gmailEnabled: { type: boolean }, smtpEnabled: { type: boolean }, senderFilter: { type: string }, mode: { type: string } } }
+    GmailOAuthStart: { type: object, properties: { authorizationUrl: { type: string, format: uri }, expiresAt: { type: string, format: date-time } } }
+    GmailOAuthCallback: { type: object, properties: { connected: { type: boolean }, message: { type: string } } }
+    GmailOAuthStatus: { type: object, description: Never contains client secret, access token, refresh token, or state., properties: { configured: { type: boolean }, connected: { type: boolean }, monitoredMailbox: { type: string }, senderFilter: { type: string }, connectedAt: { type: string, format: date-time, nullable: true }, mode: { type: string, enum: [disabled, gmail-read-only] } } }
     AuditLogPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
     AuditLog: { type: object, properties: { id: { type: string }, actor: { type: string }, action: { type: string }, entityType: { type: string }, entityId: { type: string }, before: { type: object }, after: { type: object }, timestamp: { type: string, format: date-time } } }

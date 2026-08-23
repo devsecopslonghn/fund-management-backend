@@ -1,12 +1,14 @@
 package com.fundmanagement.api.service;
 
 import com.fundmanagement.api.config.FundProperties;
+import com.fundmanagement.api.config.GmailProperties;
 import com.fundmanagement.api.domain.SystemSettingsDocument;
 import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.repository.SystemSettingsRepository;
 import java.time.Instant;
 import java.util.Map;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Service
 public class SettingsService {
@@ -14,9 +16,11 @@ public class SettingsService {
   private final SystemSettingsRepository repository;
   private final FundProperties properties;
   private final AuditService audit;
+  private final GmailProperties gmailProperties;
 
-  public SettingsService(SystemSettingsRepository repository, FundProperties properties, AuditService audit) {
-    this.repository = repository; this.properties = properties; this.audit = audit;
+  @Autowired
+  public SettingsService(SystemSettingsRepository repository, FundProperties properties, AuditService audit, GmailProperties gmailProperties) {
+    this.repository = repository; this.properties = properties; this.audit = audit; this.gmailProperties = gmailProperties;
   }
 
   public ApiDtos.SettingsResponse get() { return response(repository.findById(ID).orElseGet(this::defaults)); }
@@ -40,8 +44,9 @@ public class SettingsService {
 
   public ApiDtos.IngestionStatusResponse ingestionStatus() {
     ApiDtos.SettingsResponse value = get();
-    String mode = value.gmailEnabled() ? "gmail-oauth-read-only" : "disabled";
-    return new ApiDtos.IngestionStatusResponse(value.ingestionEnabled(), value.gmailEnabled(), value.smtpEnabled(), value.gmailSenderFilter(), mode);
+    boolean gmailEnabled = value.gmailEnabled() && gmailProperties.isEnabled();
+    String mode = gmailEnabled ? "gmail-oauth-read-only" : "disabled";
+    return new ApiDtos.IngestionStatusResponse(value.ingestionEnabled(), gmailEnabled, value.smtpEnabled(), value.gmailSenderFilter(), mode);
   }
 
   private SystemSettingsDocument defaults() {

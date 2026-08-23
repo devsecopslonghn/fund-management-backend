@@ -56,4 +56,7 @@ public final class ApiDtos {
   public record ReconciliationReviewRequest(@NotNull Boolean ignore, String memberId, @Size(max = 500) String note) {}
   public record IngestionStatusResponse(boolean enabled, boolean gmailEnabled, boolean smtpEnabled, String senderFilter, String mode) {}
   public record LegacyMigrationPreviewResponse(boolean dryRun, boolean applyEnabled, long memberCount, long duePeriodCount, long paymentCount, String message) {}
+  public record GmailOAuthStartResponse(String authorizationUrl, Instant expiresAt) {}
+  public record GmailOAuthCallbackResponse(boolean connected, String message) {}
+  public record GmailOAuthStatusResponse(boolean configured, boolean connected, String monitoredMailbox, String senderFilter, Instant connectedAt, String mode) {}
 }
