@@ -30,12 +30,14 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class DuesService {
-  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings;
+  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow;
   /** Test-friendly constructor; production uses the audited constructor below. */
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null); }
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null); }
   /** Test-friendly constructor with persisted settings. */
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings) { this(members, dues, intents, memberService, properties, null, settings); }
-  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; }
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings) { this(members, dues, intents, memberService, properties, null, settings, null); }
+  /** Test-friendly constructor with settings and the optional detection window. */
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings, PaymentDetectionWindowService detectionWindow) { this(members, dues, intents, memberService, properties, null, settings, detectionWindow); }
+  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
@@ -97,10 +99,17 @@ public class DuesService {
     }
     String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow();
     PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().map(p -> p.id).toList(); intent.totalAmount = amount; intent.transferContent = "QUY " + member.memberCode + " " + month.substring(5, 7) + month.substring(0, 4); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
+    if (detectionWindow != null) detectionWindow.open(java.time.Duration.ofMinutes(5));
     recordAudit("PUBLIC_PAYMENT_INTENT_CREATED", member.id);
     return toPublicResponse(intent);
   }
   public ApiDtos.DuePeriodResponse toResponse(DuePeriodDocument p) { return new ApiDtos.DuePeriodResponse(p.id, p.month, p.amountDue, p.amountPaid, p.status, p.notes); }
+  public ApiDtos.PublicPaymentIntentStatusResponse publicIntentStatus(String id) {
+    PaymentIntentDocument intent = intents.findById(id).orElseThrow(() -> new IllegalArgumentException("Payment intent not found"));
+    IntentStatus status = intent.status;
+    if (status == IntentStatus.PENDING && intent.expiresAt != null && intent.expiresAt.isBefore(Instant.now())) { intent.status = IntentStatus.EXPIRED; intents.save(intent); status = IntentStatus.EXPIRED; }
+    return new ApiDtos.PublicPaymentIntentStatusResponse(intent.id, status, intent.expiresAt);
+  }
   private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }
   private boolean hasOutstanding(DuePeriodDocument period) { return outstanding(period) > 0; }
   private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }

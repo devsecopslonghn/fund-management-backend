@@ -6,6 +6,7 @@ import com.fundmanagement.api.service.DuesService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,4 +23,5 @@ public class PublicController {
   @PostMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@Valid @RequestBody ApiDtos.PublicPaymentOptionsRequest request) { return dues.publicPaymentOptions(request); }
   @PostMapping("/payment-intents") @ResponseStatus(HttpStatus.CREATED)
   public ApiDtos.PublicPaymentIntentResponse createPaymentIntent(@Valid @RequestBody ApiDtos.PublicPaymentIntentRequest request) { return dues.createPublicIntent(request); }
+  @GetMapping("/payment-intents/{id}") public ApiDtos.PublicPaymentIntentStatusResponse paymentIntentStatus(@PathVariable String id) { return dues.publicIntentStatus(id); }
 }

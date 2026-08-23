@@ -1,24 +1,70 @@
 package com.fundmanagement.api.service;
 
 import com.fundmanagement.api.domain.BankTransactionDocument;
+import com.fundmanagement.api.domain.IntentStatus;
+import com.fundmanagement.api.domain.PaymentIntentDocument;
 import com.fundmanagement.api.dto.ApiDtos;
+import com.fundmanagement.api.config.GmailProperties;
 import com.fundmanagement.api.repository.BankTransactionRepository;
+import com.fundmanagement.api.repository.PaymentIntentRepository;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 @Service
 public class IngestionService {
-  private final BankTransactionRepository transactions; private final SacombankMessageParser parser; private final SettingsService settings;
-  public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings) { this.transactions = transactions; this.parser = parser; this.settings = settings; }
+  private final BankTransactionRepository transactions; private final SacombankMessageParser parser; private final SettingsService settings; private final PaymentIntentRepository intents; private final PaymentService payments; private final AuditService audit; private final GmailProperties gmail; private final MongoTemplate mongo;
+  public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings) { this(transactions, parser, settings, null, null, null, null, null); }
+  @Autowired public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo) { this.transactions = transactions; this.parser = parser; this.settings = settings; this.intents = intents; this.payments = payments; this.audit = audit; this.gmail = gmail; this.mongo = mongo; }
   public ApiDtos.BankTransactionResponse ingest(ApiDtos.BankTransactionIngestionRequest request) {
     if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
-    var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) return response(existing.get());
+    var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) { tryAutoMatch(existing.get()); return response(existing.get()); }
     BankTransactionDocument tx = new BankTransactionDocument(); tx.providerMessageId = request.providerMessageId().trim(); tx.rawPayload = request.rawPayload(); tx.createdAt = Instant.now(); tx.reconciliationStatus = "PARSE_FAILED";
-    try { SacombankMessageParser.ParsedBankMessage parsed = parser.parse(request.rawPayload()); tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = parsed.accountNumber(); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.reconciliationStatus = "NEEDS_REVIEW"; } catch (IllegalArgumentException ignored) { tx.occurredAt = tx.createdAt; }
-    try { return response(transactions.insert(tx)); } catch (DuplicateKeyException duplicate) { return response(transactions.findByProviderMessageId(request.providerMessageId()).orElseThrow(() -> duplicate)); }
+    try {
+      SacombankMessageParser.ParsedBankMessage parsed = parser.parse(request.rawPayload());
+      if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) throw new IllegalArgumentException("Bank message was not for the configured receiving account");
+      tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.reconciliationStatus = "NEEDS_REVIEW";
+    } catch (IllegalArgumentException ex) {
+      if ("Bank message was not for the configured receiving account".equals(ex.getMessage())) throw ex;
+      tx.occurredAt = tx.createdAt;
+    }
+    try { BankTransactionDocument saved = transactions.insert(tx); tryAutoMatch(saved); return response(saved); }
+    catch (DuplicateKeyException duplicate) { BankTransactionDocument duplicateRecord = transactions.findByProviderMessageId(request.providerMessageId()).orElseThrow(() -> duplicate); tryAutoMatch(duplicateRecord); return response(duplicateRecord); }
   }
+  private boolean sameAccount(String actual, String expected) { String left = normalizeDigits(actual); String right = normalizeDigits(expected); return left != null && right != null && !right.isBlank() && right.equals(left); }
+  private String normalizeDigits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
+
+  /** Claims a transaction atomically before matching, so two replicas cannot allocate it twice. */
+  private void tryAutoMatch(BankTransactionDocument candidate) {
+    if (payments == null || intents == null || mongo == null || candidate == null || candidate.id == null || candidate.amount <= 0 || !"IN".equals(candidate.direction) || !"NEEDS_REVIEW".equals(candidate.reconciliationStatus)) return;
+    Query query = Query.query(new Criteria().andOperator(Criteria.where("_id").is(candidate.id), Criteria.where("reconciliationStatus").is("NEEDS_REVIEW")));
+    Update claim = new Update().set("reconciliationStatus", "AUTO_MATCHING");
+    BankTransactionDocument claimed = mongo.findAndModify(query, claim, FindAndModifyOptions.options().returnNew(true), BankTransactionDocument.class);
+    if (claimed == null) return;
+    try {
+      List<PaymentIntentDocument> matches = intents.findByStatus(IntentStatus.PENDING).stream().filter(i -> exactIntentMatch(i, claimed)).toList();
+      if (matches.size() != 1) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); return; }
+      PaymentIntentDocument intent = matches.getFirst();
+      ApiDtos.ManualPaymentResponse payment = payments.record(new ApiDtos.ManualPaymentRequest(intent.memberId, claimed.amount, claimed.occurredAt, "gmail:" + claimed.providerMessageId, "Automatic match from configured read-only bank alert"), "system:gmail-auto");
+      claimed.reconciliationStatus = "MATCHED"; claimed.matchedMemberId = intent.memberId; claimed.matchedDuePeriodIds = payment.allocations().stream().map(ApiDtos.AllocationResponse::duePeriodId).toList(); claimed.reviewedBy = "system:gmail-auto"; claimed.reviewedAt = Instant.now(); transactions.save(claimed);
+      if (audit != null) audit.record("system:gmail-auto", "BANK_TRANSACTION_AUTO_MATCHED", "bank_transaction", claimed.id, java.util.Map.of("status", "NEEDS_REVIEW"), java.util.Map.of("status", "MATCHED", "amount", claimed.amount));
+    } catch (RuntimeException failure) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); }
+  }
+  private boolean exactIntentMatch(PaymentIntentDocument intent, BankTransactionDocument tx) {
+    if (intent == null || intent.status != IntentStatus.PENDING || intent.totalAmount != tx.amount || normalizeContent(intent.transferContent) == null || !normalizeContent(intent.transferContent).equals(normalizeContent(tx.parsedContent)) || intent.createdAt == null || tx.occurredAt == null) return false;
+    long window = gmail == null ? 300 : Math.max(1, gmail.getIntentMatchSeconds());
+    Duration age = Duration.between(intent.createdAt, tx.occurredAt);
+    return !age.isNegative() && age.getSeconds() <= window && (intent.expiresAt == null || !tx.occurredAt.isAfter(intent.expiresAt));
+  }
+  private String normalizeContent(String value) { return value == null || value.isBlank() ? null : value.trim().replaceAll("\\s+", " ").toUpperCase(java.util.Locale.ROOT); }
   public ApiDtos.ReconciliationPageResponse reviewQueue(int page, int size) { var result = transactions.findByReconciliationStatusOrderByOccurredAtDesc("NEEDS_REVIEW", org.springframework.data.domain.PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100))); return new ApiDtos.ReconciliationPageResponse(result.getContent().stream().map(this::response).toList(), result.getNumber(), result.getSize(), result.getTotalElements()); }
   public ApiDtos.BankTransactionResponse response(BankTransactionDocument tx) { return new ApiDtos.BankTransactionResponse(tx.id, tx.providerMessageId, tx.occurredAt, tx.amount, tx.direction, tx.parsedContent, tx.availableBalance, tx.reconciliationStatus, tx.matchedMemberId, tx.matchedDuePeriodIds, tx.createdAt); }
 }

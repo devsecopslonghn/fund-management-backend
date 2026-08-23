@@ -62,6 +62,8 @@ app:
     sender-filter: ${FUND_GMAIL_SENDER_FILTER:info@sacombank.com.vn}
     state-ttl-seconds: ${FUND_GMAIL_OAUTH_STATE_TTL_SECONDS:600}
     lease-duration-seconds: ${FUND_GMAIL_POLL_LEASE_SECONDS:900}
+    intent-match-seconds: ${FUND_GMAIL_INTENT_MATCH_SECONDS:300}
+    fast-poll-interval-ms: ${FUND_GMAIL_FAST_POLL_INTERVAL_MS:5000}
     authorize-endpoint: ${FUND_GMAIL_OAUTH_AUTHORIZE_ENDPOINT:https://accounts.google.com/o/oauth2/v2/auth}
     token-endpoint: ${FUND_GMAIL_OAUTH_TOKEN_ENDPOINT:https://oauth2.googleapis.com/token}
     api-base-url: ${FUND_GMAIL_API_BASE_URL:https://gmail.googleapis.com/gmail/v1}

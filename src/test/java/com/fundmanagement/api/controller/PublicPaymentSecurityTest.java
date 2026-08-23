@@ -2,6 +2,7 @@ package com.fundmanagement.api.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,5 +39,9 @@ class PublicPaymentSecurityTest {
     when(dues.createPublicIntent(any())).thenReturn(new ApiDtos.PublicPaymentIntentResponse("intent-1", 100_000, "QUY A001 082026", "https://qr.invalid/image", "QUY CHUNG", "123456789", "Test Bank", Instant.parse("2026-08-24T01:00:00Z"), IntentStatus.PENDING));
     mvc.perform(post("/api/v1/public/payment-intents").contentType(MediaType.APPLICATION_JSON).content("{\"fullName\":\"Nguyễn Văn A\",\"duePeriodIds\":[\"due-1\"]}"))
         .andExpect(status().isCreated()).andExpect(jsonPath("$.amount").value(100_000)).andExpect(jsonPath("$.accountNumber").value("123456789"));
+  }
+  @Test void anonymousPayerStatusContainsNoFinancialDetails() throws Exception {
+    when(dues.publicIntentStatus("intent-1")).thenReturn(new ApiDtos.PublicPaymentIntentStatusResponse("intent-1", IntentStatus.PENDING, Instant.parse("2026-08-24T01:00:00Z")));
+    mvc.perform(get("/api/v1/public/payment-intents/intent-1")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value("intent-1")).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.amount").doesNotExist()).andExpect(jsonPath("$.accountNumber").doesNotExist());
   }
 }

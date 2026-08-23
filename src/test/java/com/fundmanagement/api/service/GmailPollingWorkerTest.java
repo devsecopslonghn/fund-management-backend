@@ -23,4 +23,9 @@ class GmailPollingWorkerTest {
     var handle = new GmailPollingLeaseService.LeaseHandle("pod-a", "token"); when(lease.tryAcquire()).thenReturn(java.util.Optional.of(handle)); when(mailbox.fetchUnreadSacombankMessages()).thenReturn(List.of(new MailboxIngestionPort.MailboxMessage("m1", "raw1"), new MailboxIngestionPort.MailboxMessage("m2", "raw2"))); doThrow(new IllegalStateException("synthetic")).when(ingestion).ingest(new ApiDtos.BankTransactionIngestionRequest("m1", "raw1"));
     new GmailPollingWorker(mailbox, ingestion, lease).poll(); verify(ingestion).ingest(new ApiDtos.BankTransactionIngestionRequest("m2", "raw2")); verify(lease).release(handle);
   }
+  @Test void fastPollSkipsOutsideWindowAndNormalPollSkipsDuringWindow() {
+    PaymentDetectionWindowService window = org.mockito.Mockito.mock(PaymentDetectionWindowService.class); when(window.isActive()).thenReturn(false);
+    new GmailPollingWorker(mailbox, ingestion, lease, window).fastPoll(); verifyNoInteractions(mailbox, ingestion, lease);
+    when(window.isActive()).thenReturn(true); new GmailPollingWorker(mailbox, ingestion, lease, window).poll(); verifyNoInteractions(mailbox, ingestion, lease);
+  }
 }

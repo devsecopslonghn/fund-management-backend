@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 import com.fundmanagement.api.config.FundProperties;
 import com.fundmanagement.api.domain.DuePeriodDocument;
@@ -29,6 +30,7 @@ class DuesServiceTest {
   @Mock PaymentIntentRepository intents;
   @Mock MemberService memberService;
   @Mock SettingsService settings;
+  @Mock PaymentDetectionWindowService detectionWindow;
 
   @Test void generatesOneDueForEligibleActiveMemberAndSkipsExistingPeriod() {
     MemberDocument first = member("m-1", "2026-07"); MemberDocument second = member("m-2", "2026-09");
@@ -100,11 +102,12 @@ class DuesServiceTest {
     when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(settings.get()).thenReturn(new ApiDtos.SettingsResponse(100_000, .85, "Sacombank Updated", "970499", "99887766", "UPDATED FUND HOLDER", false, false, false, false, "", false, "", 587, ""));
     FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("old-account"); properties.setAccountHolder("OLD HOLDER");
-    DuesService service = new DuesService(members, dues, intents, memberService, properties, settings);
+    DuesService service = new DuesService(members, dues, intents, memberService, properties, settings, detectionWindow);
 
     ApiDtos.PublicPaymentIntentResponse result = service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
 
     assertThat(result.bankName()).isEqualTo("Sacombank Updated"); assertThat(result.accountNumber()).isEqualTo("99887766"); assertThat(result.accountHolder()).isEqualTo("UPDATED FUND HOLDER"); assertThat(result.qrImageUrl()).contains("970499-99887766");
+    verify(detectionWindow).open(java.time.Duration.ofMinutes(5));
   }
 
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = paid >= due ? com.fundmanagement.api.domain.DueStatus.PAID : com.fundmanagement.api.domain.DueStatus.PARTIAL; return value; }

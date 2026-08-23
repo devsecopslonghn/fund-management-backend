@@ -34,6 +34,8 @@ public final class ApiDtos {
   public record PublicPaymentIntentRequest(@NotBlank @Size(max = 120) String fullName, @Pattern(regexp = "^[A-Za-z0-9_-]{2,32}$") String memberCode, @NotEmpty List<@NotBlank String> duePeriodIds) {}
   /** Public payment response includes fund transfer details but never member identity or history. */
   public record PublicPaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
+  /** Polling response intentionally contains no member, amount, account, or transaction history. */
+  public record PublicPaymentIntentStatusResponse(String id, IntentStatus status, Instant expiresAt) {}
   public record PaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   public record GenerationResult(String month, int created, int skipped) {}
   public record ManualPaymentRequest(@NotBlank String memberId, @Min(1) long amount, @NotNull Instant occurredAt, @NotBlank @Size(min = 16, max = 128) String idempotencyKey, @Size(max = 500) String note) {}

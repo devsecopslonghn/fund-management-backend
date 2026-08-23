@@ -1,26 +1,54 @@
 package com.fundmanagement.api.service;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
-/** Parser for redacted key/value fixtures and conservative Sacombank HTML variants. */
+/** Conservative parser for redacted key/value and Sacombank bilingual alert variants. */
 @Component
 public class BasicSacombankMessageParser implements SacombankMessageParser {
-  private static final Pattern AMOUNT = Pattern.compile("(?:amount|số tiền|transaction amount)\\s*[:=]\\s*([0-9][0-9.,]*)", Pattern.CASE_INSENSITIVE);
-  private static final Pattern CONTENT = Pattern.compile("(?:content|nội dung|description)\\s*[:=]\\s*([^\\r\\n<]{1,500})", Pattern.CASE_INSENSITIVE);
-  private static final Pattern TIME = Pattern.compile("(?:occurredAt|transaction time|thời gian)\\s*[:=]\\s*([^\\r\\n<]{1,80})", Pattern.CASE_INSENSITIVE);
+  private static final Pattern ACCOUNT = Pattern.compile("(?:account(?:\\s*(?:number|no\\.?))?|tài khoản|so tk)\\s*[:=]?\\s*([0-9][0-9 .-]{5,30})", Pattern.CASE_INSENSITIVE);
+  private static final Pattern LABELED_AMOUNT = Pattern.compile("(?:amount|số tiền|transaction amount)\\s*[:=]?\\s*([+-]?)\\s*([0-9][0-9.,]*)", Pattern.CASE_INSENSITIVE);
+  private static final Pattern SIGNED_AMOUNT = Pattern.compile("([+-])\\s*([0-9][0-9.,]*)\\s*(?:VND|đ)", Pattern.CASE_INSENSITIVE);
+  private static final Pattern CONTENT = Pattern.compile("(?:content|nội dung|description)\\s*[:=]?\\s*([^\\r\\n<;]{1,500})", Pattern.CASE_INSENSITIVE);
+  private static final Pattern TIME = Pattern.compile("(?:occurredAt|transaction time|thời gian|date|ngày(?: giờ)?)\\s*[:=]?\\s*([^\\r\\n<;]{1,80})", Pattern.CASE_INSENSITIVE);
+  private static final Pattern BALANCE = Pattern.compile("(?:available balance|số dư khả dụng|available)\\s*[:=]?\\s*([0-9][0-9.,]*)", Pattern.CASE_INSENSITIVE);
+  private static final DateTimeFormatter SACOMBANK_TIME = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+
   @Override public ParsedBankMessage parse(String rawPayload) {
     if (rawPayload == null || rawPayload.isBlank()) throw new IllegalArgumentException("Empty bank message");
-    String lower = rawPayload.toLowerCase(Locale.ROOT);
-    String direction = lower.contains("direction=out") || lower.contains("outgoing") || lower.contains("ghi nợ") ? "OUT" : "IN";
-    long amount = number(rawPayload, AMOUNT); if (amount <= 0) throw new IllegalArgumentException("Bank amount was not recognized");
-    String content = match(rawPayload, CONTENT); Instant occurredAt = parseTime(match(rawPayload, TIME));
-    return new ParsedBankMessage(occurredAt == null ? Instant.now() : occurredAt, amount, direction, null, content, null);
+    String raw = rawPayload.replace("&nbsp;", " ").replaceAll("<[^>]*>", " ");
+    Matcher labeled = LABELED_AMOUNT.matcher(raw); Matcher signed = SIGNED_AMOUNT.matcher(raw);
+    String sign = null; String amountText = null;
+    if (labeled.find()) { sign = labeled.group(1); amountText = labeled.group(2); }
+    else if (signed.find()) { sign = signed.group(1); amountText = signed.group(2); }
+    long amount = number(amountText); if (amount <= 0) throw new IllegalArgumentException("Bank amount was not recognized");
+    String lower = raw.toLowerCase(Locale.ROOT);
+    String direction = "-".equals(sign) || lower.contains("direction=out") || lower.contains("outgoing") || lower.contains("ghi nợ") ? "OUT" : "IN";
+    String account = digits(match(raw, ACCOUNT));
+    String content = clean(match(raw, CONTENT));
+    Instant occurredAt = parseTime(clean(match(raw, TIME)));
+    Long availableBalance = nullableNumber(match(raw, BALANCE));
+    return new ParsedBankMessage(occurredAt == null ? Instant.now() : occurredAt, amount, direction, account, content, availableBalance);
   }
-  private long number(String raw, Pattern pattern) { String value = match(raw, pattern); if (value == null) return 0; try { return Long.parseLong(value.replaceAll("[.,]", "")); } catch (NumberFormatException ex) { throw new IllegalArgumentException("Bank amount was not recognized"); } }
+
+  private long number(String value) {
+    if (value == null || value.isBlank()) return 0;
+    try { return Long.parseLong(value.replaceAll("[.,]", "")); } catch (NumberFormatException ex) { throw new IllegalArgumentException("Bank amount was not recognized"); }
+  }
+  private Long nullableNumber(String value) { if (value == null) return null; long parsed = number(value); return parsed < 0 ? null : parsed; }
   private String match(String raw, Pattern pattern) { Matcher matcher = pattern.matcher(raw); return matcher.find() ? matcher.group(1).trim() : null; }
-  private Instant parseTime(String value) { if (value == null) return null; try { return Instant.parse(value); } catch (RuntimeException ignored) { return null; } }
+  private String clean(String value) { return value == null ? null : value.replaceAll("\\s+", " ").trim(); }
+  private String digits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
+  private Instant parseTime(String value) {
+    if (value == null) return null;
+    try { return Instant.parse(value); } catch (DateTimeParseException ignored) { }
+    try { return LocalDateTime.parse(value, SACOMBANK_TIME).atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(); } catch (DateTimeParseException ignored) { return null; }
+  }
 }
