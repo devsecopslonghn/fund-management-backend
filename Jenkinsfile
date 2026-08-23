@@ -19,6 +19,10 @@ ciPipeline(
     artifactProfile: 'nexus-container-dev',
     images: [
         [name: 'backend', dockerfile: 'Dockerfile']
+    ],
+    generatedGitOps: [
+        commitPattern: /^chore\(gitops\): deploy .* \[skip ci\]$/,
+        files: ['deploy/chart/values.yaml']
     ]
 )
 
