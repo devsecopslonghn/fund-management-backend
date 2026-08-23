@@ -28,6 +28,7 @@ class DuesServiceTest {
   @Mock DuePeriodRepository dues;
   @Mock PaymentIntentRepository intents;
   @Mock MemberService memberService;
+  @Mock SettingsService settings;
 
   @Test void generatesOneDueForEligibleActiveMemberAndSkipsExistingPeriod() {
     MemberDocument first = member("m-1", "2026-07"); MemberDocument second = member("m-2", "2026-09");
@@ -88,6 +89,22 @@ class DuesServiceTest {
     assertThat(result.transferContent()).isEqualTo("QUY A001 082026");
     assertThatThrownBy(() -> service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-2"))))
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("invalid");
+  }
+
+  @Test void publicQrUsesPersistedBankSettingsWithoutRestart() {
+    MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
+    DuePeriodDocument unpaid = due("due-1", "2026-08", 100_000, 0);
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(member));
+    when(memberService.normalizeName(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class).trim().replaceAll("\\s+", " ").toLowerCase());
+    when(dues.findByMemberIdAndIdIn("m-1", java.util.Set.of("due-1"))).thenReturn(List.of(unpaid));
+    when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(settings.get()).thenReturn(new ApiDtos.SettingsResponse(100_000, .85, "Sacombank Updated", "970499", "99887766", "UPDATED FUND HOLDER", false, false, false, false, "", false, "", 587, ""));
+    FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("old-account"); properties.setAccountHolder("OLD HOLDER");
+    DuesService service = new DuesService(members, dues, intents, memberService, properties, settings);
+
+    ApiDtos.PublicPaymentIntentResponse result = service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
+
+    assertThat(result.bankName()).isEqualTo("Sacombank Updated"); assertThat(result.accountNumber()).isEqualTo("99887766"); assertThat(result.accountHolder()).isEqualTo("UPDATED FUND HOLDER"); assertThat(result.qrImageUrl()).contains("970499-99887766");
   }
 
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = paid >= due ? com.fundmanagement.api.domain.DueStatus.PAID : com.fundmanagement.api.domain.DueStatus.PARTIAL; return value; }
