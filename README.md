@@ -409,7 +409,7 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 
 | Component | Proposed Technology | Role |
 |---|---|---|
-| Frontend | Static SPA (framework TBD — React/Vue/etc.), built at CI time, served as static files by **Nginx** (also reverse-proxies `/api/*` to the backend) | Public overview, anonymous payment page, authenticated admin console |
+| Frontend | Static SPA (framework TBD — React/Vue/etc.), built at CI time, served as static files by **Nginx** | Browser calls only same-origin `/api/*`; Nginx must reverse-proxy it to `fund-management-backend.fund-management.svc.cluster.local:8080`, never to a public backend URL |
 | Backend API | **Java, Spring Boot** | REST API, business logic (dues, reconciliation, expenses), auth |
 | Database | **MongoDB** (replica set recommended even at small scale, for durability; single node + backups is an acceptable v1 trade-off) | Primary data store |
 | Email Worker | Java (Spring Boot module or a separate deployable jar), using the **Gmail API Java client** (OAuth2) + Google Pub/Sub push, with polling as fallback | Fetches, parses, and feeds transactions into the reconciliation engine |
@@ -432,6 +432,9 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 - A dedicated Kubernetes namespace for the fund system; separate dev/staging/prod if feasible.
 - Daily MongoDB backup CronJob, shipped to S3-compatible/MinIO object storage.
 - `/healthz` endpoint per service for liveness/readiness probes.
+- Production SPA requests **must** use the relative same-origin `/api/v1` base path. The browser must never receive a Kubernetes `*.svc` address or a direct/public backend host; only the in-cluster Nginx proxy resolves the backend Service FQDN.
+- Nginx must use bounded upstream connect/read timeouts and return a gateway failure promptly when no backend endpoint is ready. The UI must distinguish that unavailable state from a valid "member not found" result.
+- The backend rollout is eligible only on nodes with verified DNS/TLS egress to the managed MongoDB cluster. Until egress is fixed cluster-wide, its Helm workload pins to the verified node and uses a single replica; remove that constraint only after a two-node connectivity test passes.
 - Centralized logging via Fluentd/OTel Collector → Elasticsearch/Kibana (reusing prior experience with the Jenkins/GitLab logging pipeline).
 
 ### 8.4 Repository & Documentation Strategy (Two Repos)
@@ -513,6 +516,18 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 - Module F basics: overview dashboard, income/expense charts.
 - Public page + anonymous payer-name payment page (no member login), with authenticated Admin member management.
 - Basic Docker/K8s deployment with DB backups.
+
+### 11.1.1 Current Implementation & Remaining MVP Work
+
+Implemented: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents; same-origin frontend API routing through the backend Kubernetes Service; Helm/ArgoCD delivery.
+
+Remaining before MVP can be considered operationally complete:
+
+- Finish Admin expense create/edit/delete UI and its end-to-end verification (Module C is not yet fully delivered).
+- Run monthly due generation as an idempotent scheduled job, expose its result to Admin, and test it against imported members/rates.
+- Restore backend availability on every schedulable node by fixing managed-MongoDB DNS/TLS egress; then add a PodDisruptionBudget and ≥2 backend replicas.
+- Automate daily MongoDB backups and execute a documented restore test.
+- Publish/validate the versioned OpenAPI contract in CI, then add browser-level integration tests for the public payer and Admin member flows.
 
 ### 11.2 Phase 2 — Reconciliation Automation
 
