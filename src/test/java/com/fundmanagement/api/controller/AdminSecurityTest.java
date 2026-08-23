@@ -11,6 +11,12 @@ import com.fundmanagement.api.service.DuesService;
 import com.fundmanagement.api.service.ExpenseService;
 import com.fundmanagement.api.service.MemberService;
 import com.fundmanagement.api.service.PaymentService;
+import com.fundmanagement.api.service.SettingsService;
+import com.fundmanagement.api.service.AuditService;
+import com.fundmanagement.api.service.ReportService;
+import com.fundmanagement.api.service.IngestionService;
+import com.fundmanagement.api.service.ReconciliationService;
+import com.fundmanagement.api.service.LegacyMigrationService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +36,12 @@ class AdminSecurityTest {
   @MockitoBean PaymentService payments;
   @MockitoBean ExpenseService expenses;
   @MockitoBean DashboardService dashboard;
+  @MockitoBean SettingsService settings;
+  @MockitoBean AuditService audit;
+  @MockitoBean ReportService reports;
+  @MockitoBean IngestionService ingestion;
+  @MockitoBean ReconciliationService reconciliation;
+  @MockitoBean LegacyMigrationService migration;
 
   @Test void rejectsUnauthenticatedAdminRequest() throws Exception { mvc.perform(get("/api/v1/admin/members")).andExpect(status().isUnauthorized()); }
   @Test @WithMockUser(roles = "ADMIN") void allowsAdminRequest() throws Exception { when(members.list(0, 25)).thenReturn(new ApiDtos.MemberPageResponse(List.of(), 0, 25, 0)); mvc.perform(get("/api/v1/admin/members")).andExpect(status().isOk()); }

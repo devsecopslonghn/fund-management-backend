@@ -1,4 +1,10 @@
 package com.fundmanagement.api.repository;
-import com.fundmanagement.api.domain.AuditLogDocument;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
-public interface AuditLogRepository extends MongoRepository<AuditLogDocument, String> {}
+import com.fundmanagement.api.domain.AuditLogDocument;
+import java.time.Instant;
+public interface AuditLogRepository extends MongoRepository<AuditLogDocument, String> {
+  Page<AuditLogDocument> findAllByOrderByTimestampDesc(Pageable pageable);
+  Page<AuditLogDocument> findByEntityTypeOrderByTimestampDesc(String entityType, Pageable pageable);
+}

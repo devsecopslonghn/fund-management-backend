@@ -5,6 +5,7 @@ import com.fundmanagement.api.domain.IntentStatus;
 import com.fundmanagement.api.domain.MemberStatus;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -13,6 +14,7 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 public final class ApiDtos {
   private ApiDtos() {}
@@ -21,6 +23,9 @@ public final class ApiDtos {
   public record CreatedMemberResponse(String id, String memberCode, String fullName, String email, String phone, String joinMonth, String baselineMonth, MemberStatus status, long contributionAmount) {}
   public record MemberPageResponse(List<MemberResponse> content, int page, int size, long totalElements) {}
   public record DuePeriodResponse(String id, String month, long amountDue, long amountPaid, DueStatus status, String notes) {}
+  public record AdminDuePeriodResponse(String id, String memberId, String month, long amountDue, long amountPaid, DueStatus status, String notes, Long version) {}
+  public record DuePeriodPageResponse(List<AdminDuePeriodResponse> content, int page, int size, long totalElements) {}
+  public record DueAdjustmentRequest(@Min(0) long amountDue, @Size(max = 1000) String notes) {}
   /** Public response deliberately contains only the outstanding amount, never paid totals or history. */
   public record PublicDuePeriodResponse(String id, String month, long outstandingAmount) {}
   public record PublicMemberMatch(String fullName, String memberCode) {}
@@ -40,6 +45,15 @@ public final class ApiDtos {
   public record MonthlySeriesResponse(String month, long income, long expense) {}
   public record PublicOverviewResponse(long balance, long incomeThisMonth, long expenseThisMonth, int currentMonthCompliancePercent, List<MonthlySeriesResponse> monthlySeries, List<PublicMemberStatus> members) {}
   public record DashboardResponse(long balance, long totalIncome, long totalExpense, int currentMonthCompliancePercent, long reviewCount, List<MonthlySeriesResponse> monthlySeries, List<MemberResponse> latePayers) {}
-  public record SettingsResponse(long defaultContributionAmount, double autoReconciliationThreshold, String bankName, String bankCode, String accountNumber, String accountHolder) {}
-  public record SettingsRequest(@Min(1) long defaultContributionAmount, @Min(0) double autoReconciliationThreshold, @NotBlank String bankName, @NotBlank String bankCode, @NotBlank String accountNumber, @NotBlank String accountHolder) {}
+  public record SettingsResponse(long defaultContributionAmount, double autoReconciliationThreshold, String bankName, String bankCode, String accountNumber, String accountHolder, boolean dueSchedulerEnabled, boolean startupCatchUpEnabled, boolean ingestionEnabled, boolean gmailEnabled, String gmailSenderFilter, boolean smtpEnabled, String smtpHost, int smtpPort, String smtpFrom) {}
+  public record SettingsRequest(@Min(1) long defaultContributionAmount, @Min(0) @Max(1) double autoReconciliationThreshold, @NotBlank String bankName, @NotBlank String bankCode, @NotBlank String accountNumber, @NotBlank String accountHolder, boolean dueSchedulerEnabled, boolean startupCatchUpEnabled, boolean ingestionEnabled, boolean gmailEnabled, @Size(max = 254) String gmailSenderFilter, boolean smtpEnabled, @Size(max = 255) String smtpHost, @Min(1) int smtpPort, @Size(max = 254) String smtpFrom, @Size(max = 255) String smtpSecretRef) {}
+  public record AuditLogResponse(String id, String actor, String action, String entityType, String entityId, Map<String, Object> before, Map<String, Object> after, Instant timestamp) {}
+  public record AuditLogPageResponse(List<AuditLogResponse> content, int page, int size, long totalElements) {}
+  public record ExpenseReportResponse(long totalExpense, Map<String, Long> byCategory, List<MonthlySeriesResponse> monthlySeries) {}
+  public record BankTransactionResponse(String id, String providerMessageId, Instant occurredAt, long amount, String direction, String parsedContent, Long availableBalance, String reconciliationStatus, String matchedMemberId, List<String> matchedDuePeriodIds, Instant createdAt) {}
+  public record ReconciliationPageResponse(List<BankTransactionResponse> content, int page, int size, long totalElements) {}
+  public record BankTransactionIngestionRequest(@NotBlank @Size(max = 255) String providerMessageId, @NotBlank @Size(max = 500000) String rawPayload) {}
+  public record ReconciliationReviewRequest(@NotNull Boolean ignore, String memberId, @Size(max = 500) String note) {}
+  public record IngestionStatusResponse(boolean enabled, boolean gmailEnabled, boolean smtpEnabled, String senderFilter, String mode) {}
+  public record LegacyMigrationPreviewResponse(boolean dryRun, boolean applyEnabled, long memberCount, long duePeriodCount, long paymentCount, String message) {}
 }

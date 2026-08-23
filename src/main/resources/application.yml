@@ -20,6 +20,8 @@ app:
   security:
     admin-username: ${APP_ADMIN_USERNAME:}
     admin-password: ${APP_ADMIN_PASSWORD:}
+    super-admin-username: ${APP_SUPER_ADMIN_USERNAME:}
+    super-admin-password: ${APP_SUPER_ADMIN_PASSWORD:}
     allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:5173}
   fund:
     bank-name: ${FUND_BANK_NAME:Development Bank}
@@ -29,3 +31,18 @@ app:
     payment-intent-minutes: ${FUND_PAYMENT_INTENT_MINUTES:30}
     default-contribution-amount: ${FUND_DEFAULT_CONTRIBUTION_AMOUNT:100000}
     auto-reconciliation-threshold: ${FUND_AUTO_RECONCILIATION_THRESHOLD:0.85}
+    due-scheduler-enabled: ${FUND_DUE_SCHEDULER_ENABLED:false}
+    startup-catch-up-enabled: ${FUND_STARTUP_CATCH_UP_ENABLED:false}
+    ingestion-enabled: ${FUND_INGESTION_ENABLED:false}
+    gmail-enabled: ${FUND_GMAIL_ENABLED:false}
+    gmail-sender-filter: ${FUND_GMAIL_SENDER_FILTER:info@sacombank.com.vn}
+    smtp-enabled: ${FUND_SMTP_ENABLED:false}
+    smtp-host: ${FUND_SMTP_HOST:}
+    smtp-port: ${FUND_SMTP_PORT:587}
+    smtp-from: ${FUND_SMTP_FROM:}
+    smtp-secret-ref: ${FUND_SMTP_SECRET_REF:}
+  dues:
+    scheduler-enabled: ${FUND_DUE_SCHEDULER_ENABLED:false}
+    startup-catch-up-enabled: ${FUND_STARTUP_CATCH_UP_ENABLED:false}
+  migration:
+    apply-enabled: ${FUND_LEGACY_MIGRATION_APPLY_ENABLED:false}

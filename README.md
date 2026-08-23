@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| **Version** | v2.0 – Draft |
-| **Date** | 2026-08-23 |
+| **Version** | v2.1 – implementation rollout |
+| **Date** | 2026-08-24 |
 | **Author** | Long (DevOps Engineer) — drafted with Claude |
-| **Status** | Draft for review, scope not yet frozen |
+| **Status** | Implemented in source; production acceptance checks in progress |
 | **Scope** | Internal web app to manage a single group fund (~40–60 members) |
 | **Target stack** | Backend: Java (Spring Boot) · Database: MongoDB · Frontend: static SPA served via Nginx |
 
@@ -519,21 +519,19 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents; same-origin frontend API routing through the backend Kubernetes Service; Helm/ArgoCD delivery.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
-Remaining before MVP can be considered operationally complete:
+Operational checks that remain intentionally gated:
 
-- Finish Admin expense create/edit/delete UI and its end-to-end verification (Module C is not yet fully delivered).
-- Run monthly due generation as an idempotent scheduled job, expose its result to Admin, and test it against imported members/rates.
-- Add a PodDisruptionBudget and ≥2 backend replicas after confirming the managed-MongoDB DNS/TLS connectivity test on at least two schedulable nodes.
-- Automate daily MongoDB backups and execute a documented restore test.
-- Publish/validate the versioned OpenAPI contract in CI, then add browser-level integration tests for the public payer and Admin member flows.
+- Reconstruct and approve historical per-member due/payment allocations. The imported raw ledger is retained, but no blind debt generation or financial rewrite is performed; the migration API is preview-only until a reviewed importer exists. Acceptance criterion #2 is therefore not yet met.
+- Let CI publish the images and ArgoCD roll the chart, then verify two ready backend Pods on eligible nodes and a successful backup Job/restore drill.
+- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger and manual-review flow exist, but live mailbox polling/push and email delivery remain disabled rather than using invented credentials.
+- Verify a generated VietQR with two banking apps and add browser-level E2E coverage against the deployed public payer and Admin workflows.
 
 ### 11.2 Phase 2 — Reconciliation Automation
 
-- Full Module E: Gmail API integration, parser, multi-signal reconciliation engine.
-- Module G: automated confirmation + reminder emails.
-- Observability: centralized logging, alerting.
+- The safe foundations are implemented: parser interface/tests, idempotent bank-transaction ledger, review queue, manual match/ignore and notification provider boundary.
+- Gmail API OAuth read-only adapter, Sacombank production-format regression corpus, multi-signal auto-match scoring, recurring reminders, and production alerting require the external mailbox/SMTP credentials and sample messages listed above.
 
 ### 11.3 Phase 3 — Enhancements
 

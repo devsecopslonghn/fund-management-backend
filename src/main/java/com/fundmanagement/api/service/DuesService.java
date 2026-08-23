@@ -21,6 +21,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Page;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -34,10 +38,33 @@ public class DuesService {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
       if (month.compareTo(member.baselineMonth) < 0 || dues.findByMemberIdAndMonth(member.id, month).isPresent()) { skipped++; continue; }
-      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = 0; due.status = DueStatus.UNPAID; dues.save(due); created++;
+      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = 0; due.status = DueStatus.UNPAID;
+      try { dues.save(due); created++; } catch (DuplicateKeyException duplicate) { skipped++; }
     }
     return new ApiDtos.GenerationResult(month, created, skipped);
   }
+
+  public ApiDtos.DuePeriodPageResponse list(int page, int size, String month, String memberId) {
+    if (page < 0 || size < 1) throw new IllegalArgumentException("Invalid page or size");
+    PageRequest request = PageRequest.of(page, Math.min(size, 100), Sort.by("month").ascending());
+    Page<DuePeriodDocument> result = month != null && !month.isBlank() ? dues.findByMonth(month, request) : memberId != null && !memberId.isBlank() ? dues.findByMemberId(memberId, request) : dues.findAllBy(request);
+    return new ApiDtos.DuePeriodPageResponse(result.getContent().stream().map(this::adminResponse).toList(), result.getNumber(), result.getSize(), result.getTotalElements());
+  }
+
+  public ApiDtos.AdminDuePeriodResponse detail(String id) { return adminResponse(dues.findById(id).orElseThrow(() -> new IllegalArgumentException("Due period not found"))); }
+
+  public ApiDtos.AdminDuePeriodResponse adjust(String id, ApiDtos.DueAdjustmentRequest request, String actor) {
+    DuePeriodDocument due = dues.findById(id).orElseThrow(() -> new IllegalArgumentException("Due period not found"));
+    Map<String, Object> before = Map.of("amountDue", due.amountDue, "amountPaid", due.amountPaid, "status", due.status.name(), "notes", due.notes == null ? "" : due.notes);
+    due.amountDue = request.amountDue(); due.notes = request.notes() == null || request.notes().isBlank() ? null : request.notes().trim(); due.status = status(due); dues.save(due);
+    Map<String, Object> after = Map.of("amountDue", due.amountDue, "amountPaid", due.amountPaid, "status", due.status.name(), "notes", due.notes == null ? "" : due.notes);
+    auditRecord(actor, "DUE_PERIOD_ADJUSTED", "due_period", due.id, before, after);
+    return adminResponse(due);
+  }
+
+  private ApiDtos.AdminDuePeriodResponse adminResponse(DuePeriodDocument due) { return new ApiDtos.AdminDuePeriodResponse(due.id, due.memberId, due.month, due.amountDue, due.amountPaid, due.status, due.notes, due.version); }
+  private DueStatus status(DuePeriodDocument due) { if (due.amountPaid == 0) return DueStatus.UNPAID; if (due.amountPaid < due.amountDue) return DueStatus.PARTIAL; if (due.amountPaid == due.amountDue) return DueStatus.PAID; return DueStatus.OVERPAID; }
+  private void auditRecord(String actor, String action, String type, String id, Map<String, Object> before, Map<String, Object> after) { if (audit != null) audit.record(actor, action, type, id, before, after); }
   /** Resolve an anonymous payer by normalized name; a member code is mandatory for collisions. */
   public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptions(ApiDtos.PublicPaymentOptionsRequest request) {
     List<MemberDocument> matches = matchingPublicMembers(request.fullName());

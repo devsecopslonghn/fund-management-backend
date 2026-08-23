@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Fund Management API
-  version: 1.0.0-mvp
+  version: 1.1.0
   description: |
     Phase 1 API for the single-group fund. Money values are integer VND; public
     responses never disclose individual financial amounts.
@@ -97,6 +97,27 @@ paths:
       operationId: generateDuePeriods
       parameters: [{ name: month, in: query, required: true, schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }]
       responses: { '200': { description: Idempotent generation result, content: { application/json: { schema: { $ref: '#/components/schemas/GenerationResult' } } } } }
+  /admin/dues:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listDuePeriods
+      parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }, { name: month, in: query, schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }, { name: memberId, in: query, schema: { type: string } }]
+      responses: { '200': { description: Paged admin due periods, content: { application/json: { schema: { $ref: '#/components/schemas/DuePeriodPage' } } } } }
+  /admin/dues/{dueId}:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getDuePeriod
+      parameters: [{ name: dueId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Due period detail, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDuePeriod' } } } } }
+    put:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: adjustDuePeriod
+      parameters: [{ name: dueId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DueAdjustmentRequest' } } } }
+      responses: { '200': { description: Audited due adjustment, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDuePeriod' } } } } }
   /admin/payments:
     post:
       tags: [Admin]
@@ -144,24 +165,76 @@ paths:
       tags: [Admin]
       security: [{ basicAuth: [] }]
       operationId: getStatistics
-      responses: { '200': { description: MVP dashboard series; fuller reports/export are later phases, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } } }
+      responses: { '200': { description: Dashboard statistics, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } } }
+  /admin/reports/expenses:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getExpenseReport
+      parameters: [{ name: from, in: query, schema: { type: string, format: date } }, { name: to, in: query, schema: { type: string, format: date } }]
+      responses: { '200': { description: Expense totals and category/month breakdown, content: { application/json: { schema: { $ref: '#/components/schemas/ExpenseReport' } } } } }
+  /admin/reports/expenses/export:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: exportExpensesCsv
+      responses: { '200': { description: UTF-8 CSV export, content: { text/csv: { schema: { type: string, format: binary } } } } }
+  /admin/reports/export:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: exportFundSummaryCsv
+      parameters: [{ name: from, in: query, schema: { type: string, format: date } }, { name: to, in: query, schema: { type: string, format: date } }]
+      responses: { '200': { description: UTF-8 monthly income/expense summary CSV, content: { text/csv: { schema: { type: string, format: binary } } } } }
   /admin/settings:
     get:
       tags: [Admin]
       security: [{ basicAuth: [] }]
+      description: Requires SUPER_ADMIN; response excludes secret values.
       operationId: getSettings
-      responses: { '501': { description: Planned for Phase 2; settings remain deployment configuration in MVP } }
+      responses: { '200': { description: Effective settings without secret values, content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } } }
     put:
       tags: [Admin]
       security: [{ basicAuth: [] }]
+      description: Requires SUPER_ADMIN. smtpSecretRef is an external reference only.
       operationId: updateSettings
-      responses: { '501': { description: Planned for Phase 2; settings remain deployment configuration in MVP } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SettingsRequest' } } } }
+      responses: { '200': { description: Updated settings, content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } } }
+  /admin/ingestion/status:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: getIngestionStatus
+      responses: { '200': { description: Feature and provider status, content: { application/json: { schema: { $ref: '#/components/schemas/IngestionStatus' } } } } }
+  /admin/reconciliation/ingest:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: ingestBankMessage
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BankTransactionIngestionRequest' } } } }
+      responses: { '201': { description: Idempotent bank ledger record, content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } } } }
   /admin/reconciliation/review:
     get:
       tags: [Admin]
       security: [{ basicAuth: [] }]
       operationId: listReconciliationReviewQueue
-      responses: { '501': { description: "Phase 2: email ingestion and reconciliation are not enabled in MVP" } }
+      parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }]
+      responses: { '200': { description: Ranked manual review queue, content: { application/json: { schema: { $ref: '#/components/schemas/ReconciliationPage' } } } } }
+  /admin/reconciliation/{transactionId}/review:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: reviewBankTransaction
+      parameters: [{ name: transactionId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReconciliationReviewRequest' } } } }
+      responses: { '200': { description: Audited reconciliation result, content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } } } }
+  /admin/audit-logs:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listAuditLogs
+      parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }, { name: entityType, in: query, schema: { type: string } }]
+      responses: { '200': { description: Immutable financial audit events, content: { application/json: { schema: { $ref: '#/components/schemas/AuditLogPage' } } } } }
 components:
   securitySchemes: { basicAuth: { type: http, scheme: basic } }
   parameters:
@@ -172,7 +245,7 @@ components:
     NotFound: { description: Resource not found }
   schemas:
     PublicOverview: { type: object, required: [balance, members], properties: { balance: { type: integer, format: int64, description: Aggregate VND only }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, members: { type: array, items: { $ref: '#/components/schemas/PublicMemberStatus' } } } }
-    PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
+    PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [NO_DUE_PERIODS, UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
     PersonalOverview: { type: object, properties: { member: { $ref: '#/components/schemas/PersonalMember' }, totalPaid: { type: integer, format: int64 }, totalOwed: { type: integer, format: int64 }, duePeriods: { type: array, items: { $ref: '#/components/schemas/DuePeriod' } } } }
     PersonalMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string } } }
     DuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, notes: { type: string, nullable: true } } }
@@ -192,3 +265,16 @@ components:
     MonthlySeries: { type: object, properties: { month: { type: string }, income: { type: integer, format: int64 }, expense: { type: integer, format: int64 } } }
     PersonalLinkRequest: { type: object, required: [email], properties: { email: { type: string, format: email } } }
     Accepted: { type: object, properties: { message: { type: string } } }
+    AdminDuePeriod: { type: object, properties: { id: { type: string }, memberId: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string }, notes: { type: string, nullable: true }, version: { type: integer, format: int64, nullable: true } } }
+    DuePeriodPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/AdminDuePeriod' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
+    DueAdjustmentRequest: { type: object, required: [amountDue], properties: { amountDue: { type: integer, format: int64, minimum: 0 }, notes: { type: string, maxLength: 1000 } } }
+    ExpenseReport: { type: object, properties: { totalExpense: { type: integer, format: int64 }, byCategory: { type: object, additionalProperties: { type: integer, format: int64 } }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } } } }
+    Settings: { type: object, description: Never contains SMTP passwords, OAuth tokens, or other secret values., properties: { defaultContributionAmount: { type: integer, format: int64 }, autoReconciliationThreshold: { type: number, format: double }, bankName: { type: string }, bankCode: { type: string }, accountNumber: { type: string }, accountHolder: { type: string }, dueSchedulerEnabled: { type: boolean }, startupCatchUpEnabled: { type: boolean }, ingestionEnabled: { type: boolean }, gmailEnabled: { type: boolean }, gmailSenderFilter: { type: string }, smtpEnabled: { type: boolean }, smtpHost: { type: string }, smtpPort: { type: integer }, smtpFrom: { type: string } } }
+    SettingsRequest: { allOf: [{ $ref: '#/components/schemas/Settings' }, { type: object, properties: { smtpSecretRef: { type: string, description: External Secret reference only; never send a secret value. } } }] }
+    BankTransactionIngestionRequest: { type: object, required: [providerMessageId, rawPayload], properties: { providerMessageId: { type: string, maxLength: 255 }, rawPayload: { type: string, maxLength: 500000 } } }
+    BankTransaction: { type: object, properties: { id: { type: string }, providerMessageId: { type: string }, occurredAt: { type: string, format: date-time }, amount: { type: integer, format: int64 }, direction: { type: string, enum: [IN, OUT] }, parsedContent: { type: string, nullable: true }, availableBalance: { type: integer, format: int64, nullable: true }, reconciliationStatus: { type: string }, matchedMemberId: { type: string, nullable: true }, matchedDuePeriodIds: { type: array, items: { type: string } }, createdAt: { type: string, format: date-time } } }
+    ReconciliationPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/BankTransaction' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
+    ReconciliationReviewRequest: { type: object, required: [ignore], properties: { ignore: { type: boolean }, memberId: { type: string }, note: { type: string, maxLength: 500 } } }
+    IngestionStatus: { type: object, properties: { enabled: { type: boolean }, gmailEnabled: { type: boolean }, smtpEnabled: { type: boolean }, senderFilter: { type: string }, mode: { type: string } } }
+    AuditLogPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
+    AuditLog: { type: object, properties: { id: { type: string }, actor: { type: string }, action: { type: string }, entityType: { type: string }, entityId: { type: string }, before: { type: object }, after: { type: object }, timestamp: { type: string, format: date-time } } }

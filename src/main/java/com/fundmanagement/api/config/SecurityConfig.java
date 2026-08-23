@@ -1,6 +1,8 @@
 package com.fundmanagement.api.config;
 
 import java.util.List;
+import java.util.ArrayList;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,13 +23,15 @@ public class SecurityConfig {
   @Bean
   SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
     return http.csrf(csrf -> csrf.disable()).cors(Customizer.withDefaults()).httpBasic(Customizer.withDefaults())
-        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll().requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
+        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll().requestMatchers("/api/v1/admin/settings/**", "/api/v1/admin/ingestion/**", "/api/v1/admin/migrations/**").hasRole("SUPER_ADMIN").requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
   }
 
   @Bean
-  UserDetailsService users(@Value("${app.security.admin-username}") String username, @Value("${app.security.admin-password}") String password, PasswordEncoder encoder) {
+  UserDetailsService users(@Value("${app.security.admin-username}") String username, @Value("${app.security.admin-password}") String password, @Value("${app.security.super-admin-username:}") String superUsername, @Value("${app.security.super-admin-password:}") String superPassword, PasswordEncoder encoder) {
     if (username.isBlank() || password.isBlank()) throw new IllegalStateException("APP_ADMIN_USERNAME and APP_ADMIN_PASSWORD must be configured");
-    return new InMemoryUserDetailsManager(User.withUsername(username).password(encoder.encode(password)).roles("ADMIN").build());
+    List<UserDetails> configured = new ArrayList<>(); configured.add(User.withUsername(username).password(encoder.encode(password)).roles("ADMIN").build());
+    if (!superUsername.isBlank() && !superPassword.isBlank()) configured.add(User.withUsername(superUsername).password(encoder.encode(superPassword)).roles("SUPER_ADMIN", "ADMIN").build());
+    return new InMemoryUserDetailsManager(configured);
   }
   @Bean PasswordEncoder passwordEncoder() { return PasswordEncoderFactories.createDelegatingPasswordEncoder(); }
   @Bean
