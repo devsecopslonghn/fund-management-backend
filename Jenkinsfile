@@ -34,5 +34,9 @@ cdPipeline(
     deploymentProfile: 'card-credit-dev',
     gitopsRepository: 'scm',
     valuesFile: 'deploy/chart/values.yaml',
-    variables: [imageTag: env.IMAGE_TAG]
+    variables: [imageTag: env.IMAGE_TAG],
+    generatedGitOps: [
+        commitPattern: /^chore\(gitops\): deploy .* \[skip ci\]$/,
+        files: ['deploy/chart/values.yaml']
+    ]
 )
