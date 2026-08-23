@@ -2,7 +2,7 @@
 # an immutable image tag into this application repository.
 image:
   repository: nexus.apps.drgdevlab.com/fund-management/backend
-  tag: 34830279884b
+  tag: 3839a036dc47
   pullPolicy: IfNotPresent
 
 imagePullSecret: nexus-registry
