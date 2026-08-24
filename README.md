@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Version** | v2.1 – implementation rollout |
+| **Version** | v2.2 – opaque payment-reference update |
 | **Date** | 2026-08-24 |
 | **Author** | Long (DevOps Engineer) — drafted with Claude |
 | **Status** | Implemented in source; production acceptance checks in progress |
@@ -167,10 +167,10 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | ID | Requirement | Note |
 |---|---|---|
 | FR-D-01 | Without login, a payer enters/selects their exact full name, selects due period(s) to pay (default: all outstanding), and the system computes the total. | Require member code only when duplicate names exist |
-| FR-D-02 | The system generates a **VietQR (Napas 247)** code containing: fund account number, amount, and a standardized transfer-content string (see §6.3). | Use a public VietQR image API or generate the EMVCo payload directly |
+| FR-D-02 | The system generates a **VietQR (Napas 247)** code containing: fund account number, amount, and exactly one opaque 10-character `A-Z0-9` transfer reference (see §6.3). | The reference must not encode member code or month |
 | FR-D-03 | The QR page also shows a "Copy content / account number" button for manual transfers. | |
 | FR-D-04 | Creating a QR marks the related due period(s) as "Awaiting payment" and records a **payment intent** for later matching. | |
-| FR-D-05 | The anonymous payment endpoint returns only the selected payable due periods, total, QR and standardized transfer content; it must not return email, phone, full history, or data for another member. | Rate-limit and audit lookup/intent creation |
+| FR-D-05 | The anonymous payment endpoint returns only the selected payable due periods, total, QR and opaque transfer reference; it must not return email, phone, full history, or data for another member. | Rate-limit and audit lookup/intent creation |
 
 ### 4.5 Module E — Email Ingestion & Auto-Reconciliation
 
@@ -305,12 +305,29 @@ Unique compound index: `(member_id, month)`.
   "member_id": "ObjectId (indexed)",
   "due_period_ids": ["ObjectId"],
   "total_amount": 300000,
-  "qr_content": "string",
+  "transfer_content": "string (exactly 10 uppercase A-Z0-9 characters for new intents)",
   "created_at": "ISODate (indexed)",
   "expires_at": "ISODate",
   "status": "pending | fulfilled | expired"
 }
 ```
+
+**`payment_references`** (stable opaque code per member and due month)
+```json
+{
+  "_id": "ObjectId",
+  "member_id": "ObjectId",
+  "month": "YYYY-MM",
+  "code": "string (unique, exactly 10 A-Z0-9 characters)",
+  "created_at": "ISODate"
+}
+```
+Unique indexes: `(member_id, month)` and `code`. New due periods provision this
+reference idempotently under those indexes; a historical due without one
+receives it on the first QR request. The two collections are deliberately not
+rewritten in a cross-document transaction, so a failed provisioning attempt is
+repaired lazily on the next QR request. Existing payment intents retain their
+legacy content and are not rewritten.
 
 **`expenses`**
 ```json
@@ -349,25 +366,26 @@ Unique compound index: `(member_id, month)`.
 
 - `members` 1—N `due_periods` (referenced by `member_id`).
 - `due_periods` N—N `bank_transactions` via the `payments` array / `matched_due_period_ids` (one transaction can cover several months; one month can be covered by several partial transactions).
-- `payment_intents` links a member's checkout action to the due periods it's meant to settle — the strongest reconciliation signal, because it is fully system-controlled.
+- `payment_references` maps each member/month to one immutable opaque transfer code; `payment_intents` stores the code selected for the earliest due month in a multi-month QR and links the checkout action to its due periods.
 - `expenses` is independent of members/due periods.
 
 ### 6.3 Auto-Reconciliation Logic
 
 This is the highest technical risk area, based on the sample email: when a member pays via an intermediary wallet (MoMo, ZaloPay...) before it lands in the Sacombank account via IBFT, **the original transfer content typed by the sender is typically overwritten** by the intermediary's own transaction reference (e.g. `"...MOMO143339946997MOMO CKN 594950 d1Y67G9Y - MBBANK IBFT..."`). Content string matching alone is therefore not reliable enough. Recommended approach: **multi-signal matching**, ranked by confidence:
 
-1. **Signal 1 — Content contains member code**: if `raw_content` contains the member code in any recognizable form (case-insensitive, tolerant formatting), confidence ≥ 0.9.
+1. **Signal 1 — Content contains an active payment reference token**: for a QR intent, the parsed transfer description must contain the stored opaque 10-character member/month reference as a delimited A-Z0-9 token (surrounding bank references are allowed); this is the strongest content signal and does not reveal member identity.
 2. **Signal 2 — Exact amount match against a single pending due period** for one member: confidence 0.6–0.85. Especially useful because contribution rates differ across members (100k / 200k / 1,000,000), which narrows candidates.
 3. **Signal 3 — Amount is an exact multiple of a member's rate** (e.g. 300,000 = 3 × 100,000) and that member owes exactly that many months: confidence 0.5–0.7.
 4. **Signal 4 — Timing proximity to a `payment_intent`**: the transaction occurs shortly after (e.g. within 30 minutes) a member generated a QR for a specific amount, and the amount matches: confidence ≥ 0.85. This is the **strongest signal** because it does not depend on transfer content being preserved by a third party.
 
 Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0.85 → auto-record** (FR-E-04); **0.5–0.85 → suggested match**, one-click confirm by Admin; **< 0.5 → "source unclear"**, fully manual.
 
-**Recommended transfer-content format when generating a QR:**
+**Transfer-content contract when generating a QR:**
 
 - Prefer VietQR/Napas 247 codes tied directly to the Sacombank account — when a member transfers directly from another bank's app (not through a wallet), content is generally preserved through the Napas 247 rail.
-- Suggested content string: `"QUY <member_code> <MMYYYY>"` (e.g. `QUY17888 082026`), short, ASCII-only, to minimize truncation/corruption risk.
-- Never rely on content alone: always combine with the `payment_intent` timing signal (Signal 4) as the primary fallback, since it's fully controlled by the system.
+- The content is exactly one random uppercase code matching `[A-Z0-9]{10}`. It is generated once per member/month, unique globally, immutable, and reused by later intents for that month. A QR spanning multiple months uses the code of the earliest selected month.
+- New code generation is collision-retried under unique Mongo indexes. Historical due periods are assigned lazily when a QR is created; historical payment intents are preserved unchanged for backward compatibility.
+- Auto-reconciliation requires the stored 10-character reference as an exact delimited token + exact amount + short intent timing. Altered/ambiguous content remains manual review, even when a member code or other text appears.
 - Transactions that didn't originate from the system's QR flow (free-form transfers, cash conversions, etc.) will always fall into the manual-review queue — acceptable given their low frequency.
 
 ---
@@ -377,10 +395,10 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 ### 7.1 Monthly Dues Payment
 
 1. Payer opens the public payment page and enters/selects their exact full name. If duplicate names exist, the system asks for the member code; no login is required.
-2. Payer selects due period(s) to pay → system creates a `payment_intent` (member, total amount, creation time) → generates a VietQR code + standardized content. Only the currently payable dues are shown.
+2. Payer selects due period(s) to pay → system creates a `payment_intent` (member, total amount, creation time) → generates a VietQR code + the opaque 10-character reference for the earliest selected month. Only the currently payable dues are shown.
 3. Payer scans the QR with any banking/wallet app → transfers.
 4. Sacombank sends a balance-change email → Email Worker receives, parses it.
-5. Reconciliation engine scores the transaction against the 4 signals (§6.3) → auto-records if confidence is high enough.
+5. Reconciliation engine checks the exact opaque reference token, exact amount, receiving account, and short intent timing (§6.3) → auto-records only when the controlled signals agree.
 6. System updates the due period(s) → sends a confirmation email → updates the dashboard.
 
 ### 7.2 When Auto-Reconciliation Fails
@@ -501,6 +519,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 | Anonymous payer lookup exposes financial information | Privacy impact for members | Public page shows only high-level status; anonymous flow limits output to selected payable dues/QR, exact-name matching, member-code disambiguation, rate limits and audit logs; full history remains Admin-only |
 | Loss of OAuth mailbox access (expired/revoked token) | Automatic detection stops working | Early alerting on refresh-token failures; a fast re-auth procedure; always keep manual entry as a fallback |
 | Incorrect auto-reconciliation (wrong member matched) | Due-balance errors, trust impact | High auto-match threshold (≥0.85); every auto-recorded match remains visible in history labeled "automatic" so Admin can audit/undo |
+| Payment-reference migration or code collision | QR content changes or references become ambiguous | New `(member_id, month)` and global `code` unique indexes; collision retry; historical intents remain untouched. Rollback is code-only: disable new QR creation, preserve `payment_references`, and restore the previous application image; do not delete or rewrite financial records. |
 | Single-person dependency for self-hosted infra | Operational risk if the treasurer is unavailable | Document deployment/restore runbooks; grant a second Admin |
 
 ---
@@ -519,7 +538,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents with stable opaque 10-character member-month references; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and exact intent auto-match; manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
 Operational checks that remain intentionally gated:
 
@@ -530,7 +549,7 @@ Operational checks that remain intentionally gated:
 
 ### 11.2 Phase 2 — Reconciliation Automation
 
-- The safe foundations are implemented: parser interface/tests, idempotent bank-transaction ledger, review queue, manual match/ignore and notification provider boundary.
+- The safe foundations are implemented: parser interface/tests, idempotent bank-transaction ledger, review queue, manual match/ignore, stable opaque payment references, exact intent auto-match and notification provider boundary.
 - Gmail API OAuth read-only adapter, Sacombank production-format regression corpus, multi-signal auto-match scoring, recurring reminders, and production alerting require the external mailbox/SMTP credentials and sample messages listed above.
 
 ### 11.3 Phase 3 — Enhancements
@@ -548,6 +567,7 @@ Operational checks that remain intentionally gated:
 2. For every member, the total amount paid in the system matches the legacy Excel total (zero discrepancy) after import.
 3. A member joining mid-month is automatically assigned the correct baseline month.
 4. Generated VietQR codes are valid and scannable by at least two different major banking apps in testing.
+4a. Every newly generated payment intent uses exactly one immutable 10-character `A-Z0-9` reference; references are stable for member/month, globally unique, and historical intents remain readable without rewrite.
 5. *(Phase 2)* Against a test set of ≥20 real sample emails (including MoMo/IBFT relay cases), the auto-reconciliation engine achieves ≥80% correct auto-match rate at the high-confidence threshold; all remaining cases appear fully in the manual-review queue with no transaction silently dropped.
 6. An unauthenticated payer can select their own exact name and create a valid QR payment intent, while the public page and payer API never expose contact details or full individual payment history.
 7. Only an authenticated Admin can create, edit or deactivate members, and every such change is audit-logged.

@@ -74,13 +74,15 @@ logic.
 ## Reconciliation and payment intent
 
 - Creating a QR/payment flow creates a durable, expiring payment intent whose
-  amount and due periods are determined server-side. The generated VietQR
-  transfer content uses the standardized short ASCII form `QUY <member_code>
-  <MMYYYY>` when applicable.
-- Reconciliation must use the SRS multi-signal model: member-code content,
-  exact pending amount, rate multiple/owed periods, and payment-intent timing
-  plus amount. Wallet/IBFT transfer content can be altered, so never rely on
-  text matching alone.
+  amount and due periods are determined server-side. New intents use exactly
+  one immutable, globally unique 10-character `A-Z0-9` payment reference,
+  stable for each member/month; a multi-month QR uses the earliest selected
+  month. Historical intents retain legacy content for backward compatibility.
+- Reconciliation must use the SRS multi-signal model: the opaque payment
+  reference as an exact delimited token in parsed description, exact pending
+  amount, rate multiple/owed periods, and payment-intent timing plus amount.
+  Wallet/IBFT transfer content can be altered, so never rely on text matching
+  alone.
 - Thresholds are system configuration, not hard-coded: combined confidence
   >= 0.85 auto-records; 0.5–<0.85 becomes a ranked Admin suggestion; <0.5 is
   fully manual. Record confidence, signals, method (`auto`/`manual`), and the

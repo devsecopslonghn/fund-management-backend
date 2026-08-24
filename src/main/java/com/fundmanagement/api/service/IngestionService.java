@@ -59,12 +59,18 @@ public class IngestionService {
     } catch (RuntimeException failure) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); }
   }
   private boolean exactIntentMatch(PaymentIntentDocument intent, BankTransactionDocument tx) {
-    if (intent == null || intent.status != IntentStatus.PENDING || intent.totalAmount != tx.amount || normalizeContent(intent.transferContent) == null || !normalizeContent(intent.transferContent).equals(normalizeContent(tx.parsedContent)) || intent.createdAt == null || tx.occurredAt == null) return false;
+    if (intent == null || intent.status != IntentStatus.PENDING || intent.totalAmount != tx.amount || intent.transferContent == null || intent.transferContent.isBlank() || !transferMatches(intent.transferContent, tx.parsedContent) || intent.createdAt == null || tx.occurredAt == null) return false;
     long window = gmail == null ? 300 : Math.max(1, gmail.getIntentMatchSeconds());
     Duration age = Duration.between(intent.createdAt, tx.occurredAt);
     return !age.isNegative() && age.getSeconds() <= window && (intent.expiresAt == null || !tx.occurredAt.isAfter(intent.expiresAt));
   }
-  private String normalizeContent(String value) { return value == null || value.isBlank() ? null : value.trim().replaceAll("\\s+", " ").toUpperCase(java.util.Locale.ROOT); }
+  private boolean transferMatches(String expected, String actual) {
+    if (actual == null) return false;
+    if (!expected.matches("[A-Z0-9]{10}")) return expected.equals(actual);
+    String content = actual.toUpperCase(java.util.Locale.ROOT);
+    String code = expected.toUpperCase(java.util.Locale.ROOT);
+    return java.util.regex.Pattern.compile("(?:^|[^A-Z0-9])" + java.util.regex.Pattern.quote(code) + "(?:$|[^A-Z0-9])").matcher(content).find();
+  }
   public ApiDtos.ReconciliationPageResponse reviewQueue(int page, int size) { var result = transactions.findByReconciliationStatusOrderByOccurredAtDesc("NEEDS_REVIEW", org.springframework.data.domain.PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100))); return new ApiDtos.ReconciliationPageResponse(result.getContent().stream().map(this::response).toList(), result.getNumber(), result.getSize(), result.getTotalElements()); }
   public ApiDtos.BankTransactionResponse response(BankTransactionDocument tx) { return new ApiDtos.BankTransactionResponse(tx.id, tx.providerMessageId, tx.occurredAt, tx.amount, tx.direction, tx.parsedContent, tx.availableBalance, tx.reconciliationStatus, tx.matchedMemberId, tx.matchedDuePeriodIds, tx.createdAt); }
 }
