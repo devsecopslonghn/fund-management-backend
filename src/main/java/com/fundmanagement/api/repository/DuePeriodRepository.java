@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 public interface DuePeriodRepository extends MongoRepository<DuePeriodDocument, String> {
   Optional<DuePeriodDocument> findByMemberIdAndMonth(String memberId, String month);
   List<DuePeriodDocument> findByMemberIdOrderByMonthAsc(String memberId);
+  List<DuePeriodDocument> findByMemberIdInOrderByMonthAsc(Collection<String> memberIds);
   List<DuePeriodDocument> findByMemberIdAndIdIn(String memberId, Collection<String> ids);
   List<DuePeriodDocument> findByMonth(String month);
   Page<DuePeriodDocument> findByMonth(String month, Pageable pageable);

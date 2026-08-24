@@ -18,41 +18,47 @@ import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DashboardService {
   private final ManualPaymentRepository payments; private final ExpenseRepository expenses; private final MemberRepository members; private final DuePeriodRepository dues; private final MemberService memberService; private final BankTransactionRepository transactions;
   public DashboardService(ManualPaymentRepository payments, ExpenseRepository expenses, MemberRepository members, DuePeriodRepository dues, MemberService memberService, BankTransactionRepository transactions) { this.payments = payments; this.expenses = expenses; this.members = members; this.dues = dues; this.memberService = memberService; this.transactions = transactions; }
-  public ApiDtos.PublicOverviewResponse publicOverview() { Totals totals = totals(); YearMonth now = YearMonth.now(); MonthlyTotals current = monthly(now); List<ApiDtos.PublicMemberStatus> status = members.findByStatus(MemberStatus.ACTIVE).stream().map(m -> new ApiDtos.PublicMemberStatus(m.fullName, publicStatus(m))).toList(); return new ApiDtos.PublicOverviewResponse(totals.income - totals.expense, current.income, current.expense, compliance(now), series(now), status); }
+  public ApiDtos.PublicOverviewResponse publicOverview() { List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); Map<String, List<DuePeriodDocument>> dueByMember = dueByMember(active); return overview(active, dueByMember); }
   /** Public payment dashboard deliberately includes detailed member dues under the approved product policy. */
   public ApiDtos.PublicPaymentDashboardResponse publicPaymentDashboard() {
-    ApiDtos.PublicOverviewResponse overview = publicOverview();
-    List<ApiDtos.PublicPaymentDashboardMember> dashboardMembers = members.findByStatus(MemberStatus.ACTIVE).stream()
+    List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); Map<String, List<DuePeriodDocument>> dueByMember = dueByMember(active); ApiDtos.PublicOverviewResponse overview = overview(active, dueByMember);
+    List<ApiDtos.PublicPaymentDashboardMember> dashboardMembers = active.stream()
         .sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName))
-        .map(member -> new ApiDtos.PublicPaymentDashboardMember(
+        .map(member -> {
+          List<DuePeriodDocument> memberDues = dueByMember.getOrDefault(member.id, List.of());
+          return new ApiDtos.PublicPaymentDashboardMember(
             member.id,
             member.fullName,
             member.memberCode,
             member.joinMonth,
             member.baselineMonth,
             member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L),
-            publicStatus(member),
-            dues.findByMemberIdOrderByMonthAsc(member.id).stream()
+            publicStatus(memberDues),
+            memberDues.stream()
                 .sorted(Comparator.comparing(due -> due.month == null ? "" : due.month))
                 .map(due -> new ApiDtos.PublicPaymentDashboardDue(due.id, due.month, due.amountDue, due.amountPaid, Math.max(0, due.amountDue - due.amountPaid), due.status))
-                .toList()))
+                .toList());
+        })
         .toList();
     return new ApiDtos.PublicPaymentDashboardResponse(overview.balance(), overview.incomeThisMonth(), overview.expenseThisMonth(), overview.monthlySeries(), dashboardMembers);
   }
   /** Year board used by the home page. Missing configured periods are returned as NOT_OPENED, not as debt. */
   public ApiDtos.PublicPaymentDashboardResponse publicPaymentDashboard(int year) {
     if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid");
-    ApiDtos.PublicOverviewResponse overview = publicOverview();
+    List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); Map<String, List<DuePeriodDocument>> dueByMember = dueByMember(active); ApiDtos.PublicOverviewResponse overview = overview(active, dueByMember);
     List<String> months = java.util.stream.IntStream.rangeClosed(1, 12).mapToObj(m -> YearMonth.of(year, m).toString()).toList();
-    List<ApiDtos.PublicPaymentDashboardMember> result = members.findByStatus(MemberStatus.ACTIVE).stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
-      var existing = dues.findByMemberIdOrderByMonthAsc(member.id).stream().collect(java.util.stream.Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
+    List<ApiDtos.PublicPaymentDashboardMember> result = active.stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
+      var existing = dueByMember.getOrDefault(member.id, List.of()).stream().collect(Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
       int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
       YearMonth from = YearMonth.parse(start), to = from.plusMonths(count - 1L);
@@ -62,7 +68,7 @@ public class DashboardService {
         if (ym.isBefore(from) || ym.isAfter(to)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
       }).toList();
-      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(member), board);
+      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(dueByMember.getOrDefault(member.id, List.of())), board);
     }).toList();
     return new ApiDtos.PublicPaymentDashboardResponse(overview.balance(), overview.incomeThisMonth(), overview.expenseThisMonth(), overview.monthlySeries(), result, year, months);
   }
@@ -71,6 +77,9 @@ public class DashboardService {
   private MonthlyTotals monthly(YearMonth month) { Instant from = month.atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC); Instant to = month.plusMonths(1).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC); long income = payments.findByOccurredAtBetween(from, to).stream().mapToLong(p -> p.amount).sum(); long expense = expenses.findByDeletedFalseAndDateBetweenOrderByDateDesc(month.atDay(1), month.atEndOfMonth()).stream().mapToLong(e -> e.amount).sum(); return new MonthlyTotals(income, expense); }
   private List<ApiDtos.MonthlySeriesResponse> series(YearMonth end) { List<ApiDtos.MonthlySeriesResponse> result = new ArrayList<>(); for (int i = 5; i >= 0; i--) { YearMonth month = end.minusMonths(i); MonthlyTotals values = monthly(month); result.add(new ApiDtos.MonthlySeriesResponse(month.toString(), values.income, values.expense)); } return result; }
   private int compliance(YearMonth month) { List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); if (active.isEmpty()) return 100; long paid = active.stream().filter(m -> dues.findByMemberIdAndMonth(m.id, month.toString()).map(d -> d.status == DueStatus.PAID || d.status == DueStatus.OVERPAID).orElse(false)).count(); return (int) Math.round(paid * 100.0 / active.size()); }
-  private String publicStatus(MemberDocument member) { List<DuePeriodDocument> all = dues.findByMemberIdOrderByMonthAsc(member.id); if (all.isEmpty()) return "NO_DUE_PERIODS"; List<DuePeriodDocument> outstanding = all.stream().filter(d -> d.amountPaid < d.amountDue).toList(); if (outstanding.isEmpty()) return "UP_TO_DATE"; return outstanding.size() == 1 ? "SOME_MONTHS_MISSING" : "OVERDUE"; }
+  private ApiDtos.PublicOverviewResponse overview(List<MemberDocument> active, Map<String, List<DuePeriodDocument>> dueByMember) { Totals totals = totals(); YearMonth now = YearMonth.now(); MonthlyTotals current = monthly(now); long paid = active.stream().filter(m -> dueByMember.getOrDefault(m.id, List.of()).stream().anyMatch(d -> now.toString().equals(d.month) && (d.status == DueStatus.PAID || d.status == DueStatus.OVERPAID))).count(); int compliance = active.isEmpty() ? 100 : (int) Math.round(paid * 100.0 / active.size()); List<ApiDtos.PublicMemberStatus> status = active.stream().map(m -> new ApiDtos.PublicMemberStatus(m.fullName, publicStatus(dueByMember.getOrDefault(m.id, List.of())))).toList(); return new ApiDtos.PublicOverviewResponse(totals.income - totals.expense, current.income, current.expense, compliance, series(now), status); }
+  private Map<String, List<DuePeriodDocument>> dueByMember(List<MemberDocument> active) { if (active.isEmpty()) return Map.of(); List<String> ids = active.stream().map(m -> m.id).toList(); return dues.findByMemberIdInOrderByMonthAsc(ids).stream().collect(Collectors.groupingBy(d -> d.memberId, HashMap::new, Collectors.toList())); }
+  private String publicStatus(MemberDocument member) { return publicStatus(dues.findByMemberIdOrderByMonthAsc(member.id)); }
+  private String publicStatus(List<DuePeriodDocument> all) { if (all.isEmpty()) return "NO_DUE_PERIODS"; long outstanding = all.stream().filter(d -> d.amountPaid < d.amountDue).count(); if (outstanding == 0) return "UP_TO_DATE"; return outstanding == 1 ? "SOME_MONTHS_MISSING" : "OVERDUE"; }
   private record Totals(long income, long expense) {} private record MonthlyTotals(long income, long expense) {}
 }

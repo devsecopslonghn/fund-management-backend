@@ -37,14 +37,14 @@ class DashboardServiceTest {
     MemberDocument alpha = member("m-1", "Alpha", "A001");
     DuePeriodDocument later = due("due-2", "2026-09", 200_000, 100_000);
     DuePeriodDocument earlier = due("due-1", "2026-08", 100_000, 0);
+    later.memberId = "m-1";
+    earlier.memberId = "m-1";
 
     when(payments.findAll()).thenReturn(List.of());
     when(payments.findByOccurredAtBetween(any(), any())).thenReturn(List.of());
     when(expenses.findByDeletedFalseAndDateBetweenOrderByDateDesc(any(), any())).thenReturn(List.of());
     when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(beta, alpha));
-    when(dues.findByMemberIdAndMonth(anyString(), anyString())).thenReturn(Optional.empty());
-    when(dues.findByMemberIdOrderByMonthAsc("m-1")).thenReturn(List.of(later, earlier));
-    when(dues.findByMemberIdOrderByMonthAsc("m-2")).thenReturn(List.of());
+    when(dues.findByMemberIdInOrderByMonthAsc(any())).thenReturn(List.of(later, earlier));
 
     ApiDtos.PublicPaymentDashboardResponse response = new DashboardService(payments, expenses, members, dues, memberService, transactions).publicPaymentDashboard();
 
