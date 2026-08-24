@@ -122,7 +122,7 @@ A client–server internal web app:
 | Treasurer (Admin) | 1–2 people who run the fund | Authenticated access only. Manage members, record expenses, review/reconcile transactions, configure contribution rates, view all reports, system configuration |
 | Member / Payer | Group participant with a due obligation | View the public overview; without login, select their own exact name and generate a payment QR for outstanding dues |
 | Public / Guest | Anyone with the public link | View the public payment dashboard, including member/month dues and high-level fund metrics; never receive contact data, OAuth material, credentials, or raw bank messages |
-| Automated system (Email Worker) | Background process | Reads bank emails, parses, creates transaction records, runs auto-reconciliation or flags for manual review |
+| Automated system (Email Worker) | Background process | Reads bank emails, parses, creates transaction records, auto-reconciles unique annual references, or quarantines unmatched messages |
 
 > **Approved product policy**: the public payment dashboard intentionally shows member codes, due periods, amount due, amount paid, outstanding amount and status for all active members. It still never returns email, phone, OAuth material, credentials, raw bank messages, audit logs or reconciliation internals. Public access is not authentication and payment intent creation remains server-priced.
 
@@ -144,7 +144,10 @@ outstanding periods, a month count, or all periods through a selected month.
 Bank alerts containing a unique annual reference are automatically allocated
 oldest-first within that year; underpayments remain partial and excess is
 retained as an unallocated member credit on the payment ledger. No Admin review
-is required for a unique, configured annual reference.
+is required for a unique, configured annual reference. Unmatched or ambiguous
+messages are quarantined without changing dues; they are never silently assigned.
+Each QR plan is scoped to one calendar year; a cross-year prepayment is split into
+one QR per year so the reference and allocation remain unambiguous.
 
 Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
@@ -196,7 +199,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-E-02 | A parser extracts: account number, transaction datetime, amount (+/-), transfer content, and available balance from the Sacombank HTML email body. | Needs a regression test suite covering multiple content variants (direct transfer, QR, MoMo/ZaloPay relay, etc.) |
 | FR-E-03 | For incoming (+) transactions, the reconciliation engine (see §6.3) scores candidate matches against member + due period. | |
 | FR-E-04 | If matched with high confidence (configurable threshold), the system auto-records the payment, updates the due period, and emails a confirmation to the member. | Fulfils the "fully automatic" choice made by the treasurer |
-| FR-E-05 | If unmatched or low confidence, the transaction goes into a "Needs manual review" queue with ranked suggestions; Admin picks the right member/period or marks "Not fund-related" (e.g. ad-hoc donation, interest income). | |
+| FR-E-05 | If the annual reference is missing, invalid or ambiguous, the transaction is quarantined without changing any member balance; valid unique annual references never require Admin review. | |
 | FR-E-06 | Outgoing (-) transactions are logged in the bank-transaction ledger and manually cross-checked against the Expense table (not auto-created as expenses, to avoid mislabeling purpose). | |
 | FR-E-07 | Raw email payloads are retained for at least 12 months for dispute resolution. | |
 | FR-E-08 | Retry and alerting mechanisms when the mailbox connection drops or parsing fails repeatedly. | Observability — see §5, §8 |
@@ -328,22 +331,19 @@ Unique compound index: `(member_id, month)`.
 }
 ```
 
-**`payment_references`** (stable opaque code per member and due month)
+**`payment_references`** (stable opaque code per member and calendar year)
 ```json
 {
   "_id": "ObjectId",
   "member_id": "ObjectId",
-  "month": "YYYY-MM",
+  "year": 2026,
   "code": "string (unique, exactly 10 A-Z0-9 characters)",
   "created_at": "ISODate"
 }
 ```
-Unique indexes: `(member_id, month)` and `code`. New due periods provision this
-reference idempotently under those indexes; a historical due without one
-receives it on the first QR request. The two collections are deliberately not
-rewritten in a cross-document transaction, so a failed provisioning attempt is
-repaired lazily on the next QR request. Existing payment intents retain their
-legacy content and are not rewritten.
+Unique indexes: `(member_id, year)` and `code`. New payment plans reuse the
+same annual code, including plans that pay several months in advance. Legacy
+month-scoped records remain readable and existing intents are not rewritten.
 
 **`expenses`**
 ```json
@@ -382,14 +382,14 @@ legacy content and are not rewritten.
 
 - `members` 1—N `due_periods` (referenced by `member_id`).
 - `due_periods` N—N `bank_transactions` via the `payments` array / `matched_due_period_ids` (one transaction can cover several months; one month can be covered by several partial transactions).
-- `payment_references` maps each member/month to one immutable opaque transfer code; `payment_intents` stores the code selected for the earliest due month in a multi-month QR and links the checkout action to its due periods.
+- `payment_references` maps each member/year to one immutable opaque transfer code; `payment_intents` stores a plan snapshot and links the checkout action to its due periods.
 - `expenses` is independent of members/due periods.
 
 ### 6.3 Auto-Reconciliation Logic
 
 This is the highest technical risk area, based on the sample email: when a member pays via an intermediary wallet (MoMo, ZaloPay...) before it lands in the Sacombank account via IBFT, **the original transfer content typed by the sender is typically overwritten** by the intermediary's own transaction reference (e.g. `"...MOMO143339946997MOMO CKN 594950 d1Y67G9Y - MBBANK IBFT..."`). Content string matching alone is therefore not reliable enough. Recommended approach: **multi-signal matching**, ranked by confidence:
 
-1. **Signal 1 — Content contains an active payment reference token**: for a QR intent, the parsed transfer description must contain the stored opaque 10-character member/month reference as a delimited A-Z0-9 token (surrounding bank references are allowed); this is the strongest content signal and does not reveal member identity.
+1. **Signal 1 — Content contains a configured annual payment reference token**: the parsed transfer description must contain the stored opaque 10-character member/year reference as a delimited A-Z0-9 token (surrounding bank references are allowed); this is the strongest content signal and does not reveal member identity.
 2. **Signal 2 — Exact amount match against a single pending due period** for one member: confidence 0.6–0.85. Especially useful because contribution rates differ across members (100k / 200k / 1,000,000), which narrows candidates.
 3. **Signal 3 — Amount is an exact multiple of a member's rate** (e.g. 300,000 = 3 × 100,000) and that member owes exactly that many months: confidence 0.5–0.7.
 4. **Signal 4 — Timing proximity to a `payment_intent`**: the transaction occurs shortly after (e.g. within 30 minutes) a member generated a QR for a specific amount, and the amount matches: confidence ≥ 0.85. This is the **strongest signal** because it does not depend on transfer content being preserved by a third party.
@@ -399,10 +399,10 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 **Transfer-content contract when generating a QR:**
 
 - Prefer VietQR/Napas 247 codes tied directly to the Sacombank account — when a member transfers directly from another bank's app (not through a wallet), content is generally preserved through the Napas 247 rail.
-- The content is exactly one random uppercase code matching `[A-Z0-9]{10}`. It is generated once per member/month, unique globally, immutable, and reused by later intents for that month. A QR spanning multiple months uses the code of the earliest selected month.
+- The content is exactly one random uppercase code matching `[A-Z0-9]{10}`. It is generated once per member/year, unique globally, immutable, and reused by all intents for that year. A QR spanning multiple months uses the annual code for the plan year.
 - New code generation is collision-retried under unique Mongo indexes. Historical due periods are assigned lazily when a QR is created; historical payment intents are preserved unchanged for backward compatibility.
-- Auto-reconciliation requires the stored 10-character reference as an exact delimited token + exact amount + short intent timing. Altered/ambiguous content remains manual review, even when a member code or other text appears.
-- Transactions that didn't originate from the system's QR flow (free-form transfers, cash conversions, etc.) will always fall into the manual-review queue — acceptable given their low frequency.
+- Auto-reconciliation requires the stored 10-character annual reference as an exact delimited token and a configured receiving account. It does not depend on unread state or a still-pending QR intent. Altered/ambiguous content is quarantined without allocation.
+- Transactions that did not originate from the system's QR flow are accepted when they contain a unique annual reference; otherwise they remain unmatched and do not alter balances.
 
 ---
 
@@ -411,17 +411,16 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 ### 7.1 Monthly Dues Payment
 
 1. Payer opens the public payment dashboard and selects a member. No login is required.
-2. Payer selects due period(s) to pay → system creates a `payment_intent` (member, total amount, creation time) → generates a VietQR code + the opaque 10-character reference for the earliest selected month. Completed and outstanding periods are shown with their amounts and statuses.
+2. Payer selects a payment plan (all outstanding, N months, or through a month) → system creates one server-priced `payment_intent` snapshot → generates a VietQR code with the member/year opaque 10-character reference. Completed and outstanding periods are shown with their amounts and statuses.
 3. Payer scans the QR with any banking/wallet app → transfers.
 4. Sacombank sends a balance-change email → Email Worker receives, parses it.
-5. Reconciliation engine checks the exact opaque reference token, exact amount, receiving account, and short intent timing (§6.3) → auto-records only when the controlled signals agree.
+5. Reconciliation engine checks the exact annual reference token and configured receiving account → allocates FIFO in that calendar year, including late or prepayment emails, without unread dependence.
 6. System updates the due period(s) → sends a confirmation email → updates the dashboard.
 
 ### 7.2 When Auto-Reconciliation Fails
 
-1. The transaction lands in the "Needs manual review" queue, with ranked suggestions.
-2. Admin reviews, picks the correct member/period (or marks "Not fund-related").
-3. System records it as a "manual match" with the reviewer logged — usable later to improve the engine (optional, not required for v1.0).
+1. The transaction is kept in the immutable bank-transaction ledger with a quarantine status.
+2. No due period or balance is changed until a unique annual reference can be established by a later full mailbox scan or a corrected source message.
 
 ### 7.3 New Member Joining Mid-Year
 
@@ -536,7 +535,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 | Public dashboard exposes financial information | Privacy impact for members | This is an explicit product decision; keep contact data, credentials, OAuth material, raw bank messages and reconciliation internals private, with rate limits and audit logs |
 | Loss of OAuth mailbox access (expired/revoked token) | Automatic detection stops working | Early alerting on refresh-token failures; a fast re-auth procedure; always keep manual entry as a fallback |
 | Incorrect auto-reconciliation (wrong member matched) | Due-balance errors, trust impact | High auto-match threshold (≥0.85); every auto-recorded match remains visible in history labeled "automatic" so Admin can audit/undo |
-| Payment-reference migration or code collision | QR content changes or references become ambiguous | New `(member_id, month)` and global `code` unique indexes; collision retry; historical intents remain untouched. Rollback is code-only: disable new QR creation, preserve `payment_references`, and restore the previous application image; do not delete or rewrite financial records. |
+| Payment-reference migration or code collision | QR content changes or references become ambiguous | New `(member_id, year)` and global `code` unique indexes; collision retry; historical intents remain untouched. Rollback is code-only: disable new QR creation, preserve `payment_references`, and restore the previous application image; do not delete or rewrite financial records. |
 | Single-person dependency for self-hosted infra | Operational risk if the treasurer is unavailable | Document deployment/restore runbooks; grant a second Admin |
 
 ---
@@ -555,18 +554,18 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; public payment dashboard with member/month dues; server-priced VietQR payment intents with stable opaque 10-character member-month references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and exact intent auto-match; manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate with master start-month/month-count/initially-paid configuration; public year-by-year contribution board; server-priced VietQR payment plans with stable opaque 10-character member-year references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO automatic payment allocation; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly/year-plan generation; read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and annual-reference auto-match independent of unread state; unmatched-message quarantine; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
 Operational checks that remain intentionally gated:
 
-- Reconstruct and approve historical per-member due/payment allocations. The imported raw ledger is retained, but no blind debt generation or financial rewrite is performed; the migration API is preview-only until a reviewed importer exists. Acceptance criterion #2 is therefore not yet met.
+- Historical workbook ledger is retained with provenance; the one-time master import provisions only the configured start month, plan length and initially paid months. It does not require recurring Admin reconciliation.
 - Let CI publish the images and ArgoCD roll the chart, then verify two ready backend Pods on eligible nodes and a successful backup Job/restore drill.
-- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger, five-minute fast polling, and 30-minute full mailbox reconciliation/manual-review flow exist; email delivery remains disabled rather than using invented credentials.
+- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger, five-minute fast polling, and 30-minute full mailbox reconciliation flow exist; email delivery remains disabled rather than using invented credentials.
 - Verify a generated VietQR with two banking apps and add browser-level E2E coverage against the deployed public payer and Admin workflows.
 
 ### 11.2 Phase 2 — Reconciliation Automation
 
-- The safe foundations are implemented: parser interface/tests, idempotent bank-transaction ledger, review queue, manual match/ignore, stable opaque payment references, exact intent auto-match and notification provider boundary.
+- The safe foundations are implemented: parser interface/tests, idempotent bank-transaction ledger, quarantine for unmatched messages, stable opaque annual references, automatic FIFO allocation and notification provider boundary.
 - Gmail API OAuth read-only adapter, Sacombank production-format regression corpus, multi-signal auto-match scoring, recurring reminders, and production alerting require the external mailbox/SMTP credentials and sample messages listed above.
 
 ### 11.3 Phase 3 — Enhancements
@@ -584,7 +583,7 @@ Operational checks that remain intentionally gated:
 2. For every member, the total amount paid in the system matches the legacy Excel total (zero discrepancy) after import.
 3. A member joining mid-month is automatically assigned the correct baseline month.
 4. Generated VietQR codes are valid and scannable by at least two different major banking apps in testing.
-4a. Every newly generated payment intent uses exactly one immutable 10-character `A-Z0-9` reference; references are stable for member/month, globally unique, and historical intents remain readable without rewrite.
+4a. Every newly generated payment intent uses exactly one immutable 10-character `A-Z0-9` reference; references are stable for member/year, globally unique, and historical intents remain readable without rewrite.
 5. *(Phase 2)* Against a test set of ≥20 real sample emails (including MoMo/IBFT relay cases), the auto-reconciliation engine achieves ≥80% correct auto-match rate at the high-confidence threshold; all remaining cases appear fully in the manual-review queue with no transaction silently dropped.
 6. An unauthenticated visitor can select any active member from the public payment dashboard, inspect member/month due details, and create a valid QR payment intent; public responses never expose contact details, credentials, OAuth material, raw bank messages or reconciliation internals.
 7. Only an authenticated Admin can create, edit or deactivate members, and every such change is audit-logged.
