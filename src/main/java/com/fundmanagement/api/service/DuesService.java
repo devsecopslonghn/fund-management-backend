@@ -112,7 +112,11 @@ public class DuesService {
   /** Indexed member lookup with an optional year bound so the payer page never downloads other annual plans. */
   public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode, Integer year) {
     List<MemberDocument> matches;
-    if (isBlank(fullName) && !isBlank(memberCode)) matches = members.findByStatusAndMemberCode(MemberStatus.ACTIVE, memberCode.trim().toUpperCase(Locale.ROOT));
+    // The member code is the canonical public picker key. Prefer it whenever
+    // supplied; names are convenience text and may differ in Unicode accents
+    // after legacy imports. This also lets the frontend send both fields
+    // without turning a valid code into a false name-match failure.
+    if (!isBlank(memberCode)) matches = members.findByStatusAndMemberCode(MemberStatus.ACTIVE, memberCode.trim().toUpperCase(Locale.ROOT));
     else matches = members.findByStatusAndNormalizedFullName(MemberStatus.ACTIVE, memberService.normalizeName(fullName));
     if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
     if (isBlank(memberCode) && matches.size() > 1) return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
