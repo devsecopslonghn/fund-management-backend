@@ -26,6 +26,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Page;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
@@ -42,7 +43,7 @@ public class DuesService {
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings, PaymentDetectionWindowService detectionWindow, PaymentReferenceService paymentReferences) { this(members, dues, intents, memberService, properties, null, settings, detectionWindow, paymentReferences, java.util.Optional.empty(), null); }
   /** Compatibility constructor retained for existing focused tests. */
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, java.util.Optional<GmailPollingWorker> gmailPollingWorker, TaskExecutor taskExecutor) { this(members, dues, intents, memberService, properties, audit, settings, detectionWindow, null, gmailPollingWorker, taskExecutor); }
-  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, PaymentReferenceService paymentReferences, java.util.Optional<GmailPollingWorker> gmailPollingWorker, TaskExecutor taskExecutor) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; this.paymentReferences = paymentReferences; this.gmailPollingWorker = gmailPollingWorker; this.taskExecutor = taskExecutor; }
+  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, PaymentReferenceService paymentReferences, java.util.Optional<GmailPollingWorker> gmailPollingWorker, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; this.paymentReferences = paymentReferences; this.gmailPollingWorker = gmailPollingWorker; this.taskExecutor = taskExecutor; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
