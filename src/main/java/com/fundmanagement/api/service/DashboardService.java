@@ -67,7 +67,7 @@ public class DashboardService {
     List<ApiDtos.PublicPaymentDashboardMember> result = active.stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
       var existing = dueByMember.getOrDefault(member.id, List.of()).stream().collect(Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+      int count = 14;
       YearMonth from = YearMonth.parse(start);
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
         DuePeriodDocument due = existing.get(month);
@@ -95,7 +95,7 @@ public class DashboardService {
     List<ApiDtos.PublicPaymentDashboardMember> result = active.stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
       Map<String, DuePeriodDocument> existing = byMember.getOrDefault(member.id, List.of()).stream().collect(Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+      int count = 14;
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
         DuePeriodDocument d = existing.get(month);
         if (d != null) return new ApiDtos.PublicPaymentDashboardDue(d.id, month, d.amountDue, d.amountPaid, Math.max(0, d.amountDue - d.amountPaid), d.status);

@@ -61,7 +61,7 @@ public class DuesService {
     int created = 0, skipped = 0, initiallyPaid = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+      int count = 14;
       ContributionPeriod.validateRegularMonth(start);
       for (String period : ContributionPeriod.yearPeriods(year)) {
         if (!ContributionPeriod.inPlan(period, start, count)) { skipped++; continue; }
@@ -98,6 +98,7 @@ public class DuesService {
     if (Integer.parseInt(start.substring(0, 4)) > request.year()) throw new IllegalArgumentException("Contribution start month cannot be after plan year");
     int count = request.annualContributionMonths() == null ? 14 : request.annualContributionMonths();
     if (count < 1 || count > 14) throw new IllegalArgumentException("annualContributionMonths must be between 1 and 14");
+    count = 14;
     List<String> paid = request.paidPeriods() == null ? List.of() : request.paidPeriods().stream().distinct().sorted(ContributionPeriod.comparator()).toList();
     for (String period : paid) { ContributionPeriod.validate(period); if (ContributionPeriod.year(period) != request.year()) throw new IllegalArgumentException("paidPeriods must belong to the requested year"); if (!ContributionPeriod.inPlan(period, start, count)) throw new IllegalArgumentException("paidPeriods contains a period outside the configured plan"); }
     Map<String, Object> before = Map.of("contributionStartMonth", planStart(member), "annualContributionMonths", planMonths(member), "initiallyPaidMonths", member.initiallyPaidMonths == null ? List.of() : List.copyOf(member.initiallyPaidMonths));
@@ -149,7 +150,7 @@ public class DuesService {
 
   private boolean safeInPlan(String period, String start, int count) { return start != null && !start.isBlank() && ContributionPeriod.isRegularMonth(start) && ContributionPeriod.inPlan(period, start, count); }
   private String planStart(MemberDocument member) { return member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth; }
-  private int planMonths(MemberDocument member) { return member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14); }
+  private int planMonths(MemberDocument member) { return 14; }
   private void validateYear(int year) { if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid"); }
 
   public ApiDtos.DuePeriodPageResponse list(int page, int size, String month, String memberId) {
@@ -276,7 +277,7 @@ public class DuesService {
     String startValue = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
     if (startValue == null || startValue.isBlank()) return;
     if (!ContributionPeriod.isRegularMonth(startValue)) return;
-    int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+    int count = 14;
     String planEnd = ContributionPeriod.key(year, Math.min(count, 14));
     // Keep the legacy 12-period query shape for old clients/tests while a
     // 14-period plan explicitly includes the two bonus keys.

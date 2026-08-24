@@ -83,20 +83,20 @@ class DuesServiceTest {
   @Test void indexedYearLookupMaterializesConfiguredAnnualPlanBeforeReturningOptions() {
     MemberDocument member = member("m-annual", "2026-01"); member.fullName = "Hoa Trắc Điểm"; member.memberCode = "DIEMHT15476"; member.contributionStartMonth = "2026-01"; member.annualContributionMonths = 12;
     when(members.findByStatusAndMemberCode(MemberStatus.ACTIVE, "DIEMHT15476")).thenReturn(List.of(member));
-    when(dues.findByMemberIdAndMonthBetweenOrderByMonthAsc("m-annual", "2026-01", "2026-12")).thenReturn(List.of());
+    when(dues.findByMemberIdAndMonthBetweenOrderByMonthAsc("m-annual", "2026-01", "2026-14")).thenReturn(List.of());
     when(memberService.rateFor(any(MemberDocument.class), anyString())).thenReturn(100_000L);
     when(dues.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(dues.findPublicByMemberIdOrderByMonthAsc("m-annual")).thenAnswer(invocation -> {
       List<DuePeriodDocument> generated = new java.util.ArrayList<>();
-      for (int month = 1; month <= 12; month++) generated.add(due("due-" + month, String.format("2026-%02d", month), 100_000, 0));
+      for (int month = 1; month <= 14; month++) generated.add(due("due-" + month, String.format("2026-%02d", month), 100_000, 0));
       return generated;
     });
     DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
 
     ApiDtos.PublicPaymentOptionsResponse result = service.publicPaymentOptionsByMember("Hoa Trắc Điểm", "DIEMHT15476", 2026);
 
-    assertThat(result.duePeriods()).hasSize(12);
-    verify(dues).saveAll(org.mockito.ArgumentMatchers.argThat(value -> ((java.util.Collection<?>) value).size() == 12));
+    assertThat(result.duePeriods()).hasSize(14);
+    verify(dues).saveAll(org.mockito.ArgumentMatchers.argThat(value -> ((java.util.Collection<?>) value).size() == 14));
   }
 
   @Test void anonymousIntentUsesServerCalculatedAmountAndRejectsPaidPeriods() {
