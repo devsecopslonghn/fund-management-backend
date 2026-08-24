@@ -31,6 +31,26 @@ paths:
         '200':
           description: Detailed payment dashboard
           content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentDashboard' } } }
+  /public/contribution-board:
+    get:
+      tags: [Public]
+      operationId: getPublicContributionBoard
+      parameters: [{ name: year, in: query, required: true, schema: { type: integer, minimum: 2000, maximum: 9999 } }]
+      description: Lightweight year board. Due rows are projected to id, month, amount and status; contacts, OAuth and raw bank data are never returned.
+      responses:
+        '200':
+          description: Year contribution board
+          content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentDashboard' } } }
+  /public/payment-options:
+    get:
+      tags: [Public]
+      operationId: getPublicPaymentOptions
+      parameters:
+        - { name: fullName, in: query, required: false, schema: { type: string, maxLength: 120 } }
+        - { name: memberCode, in: query, required: false, schema: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' } }
+      description: Indexed member lookup for the payer panel. Supply memberCode for a duplicate-name roster.
+      responses:
+        '200': { description: Payable periods only, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentOptions' } } } }
   /public/payment-intents/{id}:
     get:
       tags: [Public]
@@ -318,6 +338,9 @@ components:
     PublicPaymentDashboard: { type: object, properties: { balance: { type: integer, format: int64 }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, year: { type: integer, nullable: true }, months: { type: array, items: { type: string } }, members: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardMember' } } } }
     PublicPaymentDashboardMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, contributionAmount: { type: integer, format: int64 }, status: { type: string }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardDue' } } } }
     PublicPaymentDashboardDue: { type: object, properties: { id: { type: string, nullable: true }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, nullable: true, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, displayStatus: { type: string, enum: [NOT_OPENED, UNPAID, PARTIAL, PAID, OVERPAID] } } }
+    PublicPaymentOptions: { type: object, properties: { requiresMemberCode: { type: boolean }, matches: { type: array, items: { $ref: '#/components/schemas/PublicMemberMatch' } }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicDuePeriod' } } } }
+    PublicMemberMatch: { type: object, properties: { fullName: { type: string }, memberCode: { type: string, nullable: true } } }
+    PublicDuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, outstandingAmount: { type: integer, format: int64 } } }
     PersonalOverview: { type: object, properties: { member: { $ref: '#/components/schemas/PersonalMember' }, totalPaid: { type: integer, format: int64 }, totalOwed: { type: integer, format: int64 }, duePeriods: { type: array, items: { $ref: '#/components/schemas/DuePeriod' } } } }
     PersonalMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string } } }
     DuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, notes: { type: string, nullable: true } } }

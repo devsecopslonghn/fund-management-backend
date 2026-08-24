@@ -67,8 +67,14 @@ public class IngestionService {
       PaymentIntentDocument intent = matches.size() == 1 ? matches.getFirst() : null;
       Integer annualYear = null;
       if (intent == null && references != null) {
-        var annualMatches = references.findAll().stream().filter(ref -> ref.year != null && transferMatches(ref.code, claimed.parsedContent)).toList();
-        if (annualMatches.size() == 1) { var annual = annualMatches.getFirst(); intent = new PaymentIntentDocument(); intent.memberId = annual.memberId; annualYear = annual.year; }
+        // Payment references are opaque 10-character tokens. Extracting tokens
+        // from the parsed description and looking them up by the unique code
+        // index avoids scanning the entire reference collection on every mail.
+        var annualMatches = java.util.regex.Pattern.compile("(?<![A-Z0-9])[A-Z0-9]{10}(?![A-Z0-9])")
+            .matcher(claimed.parsedContent == null ? "" : claimed.parsedContent.toUpperCase(java.util.Locale.ROOT));
+        java.util.Map<String, com.fundmanagement.api.domain.PaymentReferenceDocument> found = new java.util.HashMap<>();
+        while (annualMatches.find()) references.findByCode(annualMatches.group()).filter(ref -> ref.year != null).ifPresent(ref -> found.put(ref.code, ref));
+        if (found.size() == 1) { var annual = found.values().iterator().next(); intent = new PaymentIntentDocument(); intent.memberId = annual.memberId; annualYear = annual.year; }
       }
       if (intent == null) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); return; }
       ApiDtos.ManualPaymentResponse payment = annualYear == null

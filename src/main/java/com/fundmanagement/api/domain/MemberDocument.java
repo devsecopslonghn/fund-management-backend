@@ -6,9 +6,11 @@ import java.util.List;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Document("members")
+@CompoundIndex(name = "active_name_lookup", def = "{'status': 1, 'normalizedFullName': 1, 'fullName': 1}")
 public class MemberDocument {
   @Id public String id;
   @Indexed(unique = true) public String memberCode;
@@ -23,7 +25,7 @@ public class MemberDocument {
   public String contributionStartMonth;
   public Integer annualContributionMonths;
   public List<String> initiallyPaidMonths = new ArrayList<>();
-  public MemberStatus status;
+  @Indexed public MemberStatus status;
   public List<ContributionRate> contributionRates = new ArrayList<>();
   public Instant createdAt;
   public Instant updatedAt;

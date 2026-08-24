@@ -5,9 +5,11 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Document("payment_intents")
+@CompoundIndex(name = "pending_amount_expiry", def = "{'status': 1, 'totalAmount': 1, 'expiresAt': 1}")
 public class PaymentIntentDocument {
   @Id public String id;
   @Indexed public String memberId;

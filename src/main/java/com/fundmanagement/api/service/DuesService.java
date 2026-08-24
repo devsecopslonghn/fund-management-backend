@@ -106,6 +106,19 @@ public class DuesService {
     return new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch(member.fullName, isBlank(request.memberCode()) ? null : member.memberCode)), payable);
   }
 
+  /** Indexed member lookup used by the dashboard payer panel; it avoids scanning the active roster. */
+  public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode) {
+    List<MemberDocument> matches;
+    if (isBlank(fullName) && !isBlank(memberCode)) matches = members.findByStatusAndMemberCode(MemberStatus.ACTIVE, memberCode.trim().toUpperCase(Locale.ROOT));
+    else matches = members.findByStatusAndNormalizedFullName(MemberStatus.ACTIVE, memberService.normalizeName(fullName));
+    if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
+    if (isBlank(memberCode) && matches.size() > 1) return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
+    MemberDocument member = resolvePublicMember(matches, memberCode);
+    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findPublicByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
+    recordAudit("PUBLIC_PAYMENT_LOOKUP", member.id);
+    return new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch(member.fullName, isBlank(memberCode) ? null : member.memberCode)), payable);
+  }
+
   /** Creates a server-priced, expiring intent without requiring a member login. */
   public ApiDtos.PublicPaymentIntentResponse createPublicIntent(ApiDtos.PublicPaymentIntentRequest request) {
     List<MemberDocument> matches = matchingPublicMembers(request.fullName());

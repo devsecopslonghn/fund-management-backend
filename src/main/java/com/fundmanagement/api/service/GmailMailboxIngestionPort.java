@@ -13,6 +13,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.stream.Collectors;
+import com.fundmanagement.api.repository.BankTransactionRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -20,8 +24,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(prefix = "app.gmail", name = "enabled", havingValue = "true")
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
-  private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings;
-  public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
+  private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions;
+  public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
   /**
    * Reads every message matching the configured receiving account.
    *
@@ -36,7 +40,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
     String query = URLEncoder.encode(gmailSearchQuery(expectedAccount), StandardCharsets.UTF_8);
-    List<MailboxMessage> messages = new ArrayList<>();
+    List<String> candidateIds = new ArrayList<>();
     String pageToken = "";
     do {
       String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
@@ -44,10 +48,17 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       JsonNode list = get(url, token);
       for (JsonNode item : list.path("messages")) {
         String id = item.path("id").asText("");
-        if (!id.isBlank()) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
+        if (!id.isBlank()) candidateIds.add(id);
       }
       pageToken = list.path("nextPageToken").asText("");
     } while (!pageToken.isBlank());
+    if (candidateIds.isEmpty()) return List.of();
+    // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
+    // scans therefore fetch only provider IDs not already persisted locally.
+    Set<String> known = transactions.findByProviderMessageIdIn(candidateIds).stream()
+        .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+    List<MailboxMessage> messages = new ArrayList<>();
+    for (String id : candidateIds) if (!known.contains(id)) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
     return messages;
   }
   static String gmailSearchQuery(String accountNumber) {
