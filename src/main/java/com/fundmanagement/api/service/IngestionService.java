@@ -31,7 +31,7 @@ public class IngestionService {
     if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
     var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) {
       BankTransactionDocument current = existing.get();
-      if (!"MATCHED".equals(current.reconciliationStatus) && !"IGNORED".equals(current.reconciliationStatus)) reparse(current);
+      if (!"MATCHED".equals(current.reconciliationStatus) && !"IGNORED".equals(current.reconciliationStatus) && !"REVERSED".equals(current.reconciliationStatus)) reparse(current);
       tryAutoMatch(current); return response(current);
     }
     BankTransactionDocument tx = new BankTransactionDocument(); tx.providerMessageId = request.providerMessageId().trim(); tx.rawPayload = request.rawPayload(); tx.createdAt = Instant.now(); tx.reconciliationStatus = "PARSE_FAILED";
@@ -100,5 +100,6 @@ public class IngestionService {
     return java.util.regex.Pattern.compile("(?:^|[^A-Z0-9])" + java.util.regex.Pattern.quote(code) + "(?:$|[^A-Z0-9])").matcher(content).find();
   }
   public ApiDtos.ReconciliationPageResponse reviewQueue(int page, int size) { var result = transactions.findByReconciliationStatusOrderByOccurredAtDesc("NEEDS_REVIEW", org.springframework.data.domain.PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100))); return new ApiDtos.ReconciliationPageResponse(result.getContent().stream().map(this::response).toList(), result.getNumber(), result.getSize(), result.getTotalElements()); }
+  public ApiDtos.ReconciliationPageResponse matchedQueue(int page, int size) { var result = transactions.findByReconciliationStatusOrderByOccurredAtDesc("MATCHED", org.springframework.data.domain.PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100))); return new ApiDtos.ReconciliationPageResponse(result.getContent().stream().map(this::response).toList(), result.getNumber(), result.getSize(), result.getTotalElements()); }
   public ApiDtos.BankTransactionResponse response(BankTransactionDocument tx) { return new ApiDtos.BankTransactionResponse(tx.id, tx.providerMessageId, tx.occurredAt, tx.amount, tx.direction, tx.parsedContent, tx.availableBalance, tx.reconciliationStatus, tx.matchedMemberId, tx.matchedDuePeriodIds, tx.createdAt); }
 }

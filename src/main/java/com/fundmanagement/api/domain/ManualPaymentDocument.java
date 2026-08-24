@@ -18,6 +18,11 @@ public class ManualPaymentDocument {
   public String note;
   public String recordedBy;
   public List<ManualAllocation> allocations = new ArrayList<>();
+  /** Reversals are append-only financial corrections; the original payment remains auditable. */
+  public boolean reversed;
+  public Instant reversedAt;
+  public String reversedBy;
+  public String reversalReason;
   public Instant createdAt;
   public static class ManualAllocation {
     public String duePeriodId;

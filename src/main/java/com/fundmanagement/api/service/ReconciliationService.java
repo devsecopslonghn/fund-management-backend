@@ -23,4 +23,18 @@ public class ReconciliationService {
     if (member.email != null && !member.email.isBlank()) notifications.send(member.id, "confirmation", new NotificationSender.NotificationMessage(member.email, "Fund payment recorded", "Your fund payment has been recorded.", "confirmation:" + tx.providerMessageId));
     return ingestion.response(tx);
   }
+  public ApiDtos.BankTransactionResponse reverse(String id, ApiDtos.PaymentReversalRequest request, String actor) {
+    BankTransactionDocument tx = transactions.findById(id).orElseThrow(() -> new IllegalArgumentException("Bank transaction not found"));
+    if (!"MATCHED".equals(tx.reconciliationStatus)) throw new IllegalStateException("Only a matched bank transaction can be reversed");
+    String providerKey = tx.providerMessageId;
+    try {
+      payments.reverseByIdempotencyKey("gmail:" + providerKey, actor, request.reason());
+    } catch (IllegalArgumentException missingGmailKey) {
+      payments.reverseByIdempotencyKey("bank:" + providerKey, actor, request.reason());
+    }
+    String previousStatus = tx.reconciliationStatus;
+    tx.reconciliationStatus = "REVERSED"; tx.reviewedBy = actor; tx.reviewedAt = Instant.now(); transactions.save(tx);
+    audit.record(actor, "BANK_TRANSACTION_REVERSED", "bank_transaction", id, Map.of("status", previousStatus, "memberId", tx.matchedMemberId, "amount", tx.amount), Map.of("status", "REVERSED", "memberId", tx.matchedMemberId, "amount", tx.amount, "reason", request.reason()));
+    return ingestion.response(tx);
+  }
 }

@@ -55,6 +55,7 @@ public final class ApiDtos {
   public record ManualPaymentRequest(@NotBlank String memberId, @Min(1) long amount, @NotNull Instant occurredAt, @NotBlank @Size(min = 16, max = 128) String idempotencyKey, @Size(max = 500) String note) {}
   public record AllocationResponse(String duePeriodId, long amount) {}
   public record ManualPaymentResponse(String id, String memberId, long amount, long unallocatedAmount, List<AllocationResponse> allocations) {}
+  public record PaymentReversalResponse(String paymentId, String memberId, long amount, Instant reversedAt, String reason) {}
   public record ExpenseRequest(@NotNull LocalDate date, @Min(1) long amount, @NotBlank @Size(max = 500) String purpose, @Size(max = 64) String category, @Size(max = 120) String requestedBy, @Size(max = 1000) String notes) {}
   public record ExpenseResponse(String id, LocalDate date, long amount, String purpose, String category, String requestedBy, String notes, Instant createdAt, Instant updatedAt) {}
   public record PublicMemberStatus(String name, String status) {}
@@ -84,6 +85,7 @@ public final class ApiDtos {
   public record ReconciliationPageResponse(List<BankTransactionResponse> content, int page, int size, long totalElements) {}
   public record BankTransactionIngestionRequest(@NotBlank @Size(max = 255) String providerMessageId, @NotBlank @Size(max = 500000) String rawPayload) {}
   public record ReconciliationReviewRequest(@NotNull Boolean ignore, String memberId, @Size(max = 500) String note) {}
+  public record PaymentReversalRequest(@NotBlank @Size(max = 500) String reason) {}
   public record IngestionStatusResponse(boolean enabled, boolean gmailEnabled, boolean smtpEnabled, String senderFilter, String mode) {}
   public record LegacyMigrationPreviewResponse(boolean dryRun, boolean applyEnabled, long memberCount, long duePeriodCount, long paymentCount, String message) {}
   public record GmailOAuthStartResponse(String authorizationUrl, Instant expiresAt) {}

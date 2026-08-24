@@ -181,6 +181,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-B-04 | Authenticated Admin can view each member's total paid since joining, remaining balance owed, and a month-by-month breakdown. | |
 | FR-B-05 | The public payment dashboard shows each active member's month-by-month due details and status. | Contact data and bank internals remain private |
 | FR-B-06 | Admin can manually adjust a due period (e.g., waive a fee, add a note); every manual adjustment is logged with actor and timestamp. | Audit trail |
+| FR-B-07 | Authenticated Admin can reverse/cancel a matched payment with a required reason. The system restores its due allocations, marks both payment and bank transaction `REVERSED`, excludes the amount from fund totals, and preserves the original records plus an audit event. | Append-only financial history; repeated reversal is rejected |
 
 ### 4.3 Module C — Expense Management
 
@@ -212,6 +213,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-E-06 | Outgoing (-) transactions are logged in the bank-transaction ledger and manually cross-checked against the Expense table (not auto-created as expenses, to avoid mislabeling purpose). | |
 | FR-E-07 | Raw email payloads are retained for at least 12 months for dispute resolution. | |
 | FR-E-08 | Retry and alerting mechanisms when the mailbox connection drops or parsing fails repeatedly. | Observability — see §5, §8 |
+| FR-E-09 | Gmail rescans ignore transactions already marked `REVERSED`; reverse/cancel never deletes the provider message or ledger row and is idempotently blocked on repeat attempts. | Prevents a later 30-minute/full scan from re-crediting a cancelled payment |
 
 ### 4.6 Module F — Statistics & Reporting (Dashboard)
 
@@ -563,7 +565,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate with audited 14-period master payment-plan API; public year-by-year 14-period contribution board; server-priced VietQR payment plans with stable opaque 10-character member-year references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO automatic payment allocation; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly/year-plan generation; read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and annual-reference auto-match independent of unread state; unmatched-message quarantine; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate with audited 14-period master payment-plan API; public year-by-year 14-period contribution board; server-priced VietQR payment plans with stable opaque 10-character member-year references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO automatic payment allocation; audited Admin payment reverse/cancel with append-only `REVERSED` state and allocation rollback; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly/year-plan generation; read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and annual-reference auto-match independent of unread state; unmatched-message quarantine; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
 Operational checks that remain intentionally gated:
 

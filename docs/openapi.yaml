@@ -325,6 +325,13 @@ paths:
       operationId: listReconciliationReviewQueue
       parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }]
       responses: { '200': { description: Ranked manual review queue, content: { application/json: { schema: { $ref: '#/components/schemas/ReconciliationPage' } } } } }
+  /admin/reconciliation/matched:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listMatchedBankTransactions
+      parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }]
+      responses: { '200': { description: Matched transactions available for audited reversal, content: { application/json: { schema: { $ref: '#/components/schemas/ReconciliationPage' } } } } }
   /admin/reconciliation/{transactionId}/review:
     post:
       tags: [Admin]
@@ -333,6 +340,14 @@ paths:
       parameters: [{ name: transactionId, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReconciliationReviewRequest' } } } }
       responses: { '200': { description: Audited reconciliation result, content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } } } }
+  /admin/reconciliation/{transactionId}/reverse:
+    post:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: reverseMatchedBankTransaction
+      parameters: [{ name: transactionId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentReversalRequest' } } } }
+      responses: { '200': { description: Reversed transaction with preserved audit trail, content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } } } }
   /admin/audit-logs:
     get:
       tags: [Admin]
@@ -393,6 +408,7 @@ components:
     BankTransaction: { type: object, properties: { id: { type: string }, providerMessageId: { type: string }, occurredAt: { type: string, format: date-time }, amount: { type: integer, format: int64 }, direction: { type: string, enum: [IN, OUT] }, parsedContent: { type: string, nullable: true }, availableBalance: { type: integer, format: int64, nullable: true }, reconciliationStatus: { type: string }, matchedMemberId: { type: string, nullable: true }, matchedDuePeriodIds: { type: array, items: { type: string } }, createdAt: { type: string, format: date-time } } }
     ReconciliationPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/BankTransaction' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
     ReconciliationReviewRequest: { type: object, required: [ignore], properties: { ignore: { type: boolean }, memberId: { type: string }, note: { type: string, maxLength: 500 } } }
+    PaymentReversalRequest: { type: object, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 500 } } }
     IngestionStatus: { type: object, properties: { enabled: { type: boolean }, gmailEnabled: { type: boolean }, smtpEnabled: { type: boolean }, senderFilter: { type: string }, mode: { type: string } } }
     GmailOAuthStart: { type: object, properties: { authorizationUrl: { type: string, format: uri }, expiresAt: { type: string, format: date-time } } }
     GmailOAuthCallback: { type: object, properties: { connected: { type: boolean }, message: { type: string } } }

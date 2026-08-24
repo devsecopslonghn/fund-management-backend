@@ -8,6 +8,7 @@ import com.fundmanagement.api.domain.DuePeriodDocument;
 import com.fundmanagement.api.domain.DueStatus;
 import com.fundmanagement.api.domain.ManualPaymentDocument;
 import com.fundmanagement.api.domain.MemberDocument;
+import com.fundmanagement.api.domain.PaymentAllocation;
 import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.repository.DuePeriodRepository;
 import com.fundmanagement.api.repository.ManualPaymentRepository;
@@ -36,6 +37,16 @@ class PaymentServiceTest {
     ApiDtos.ManualPaymentResponse result = service.record(new ApiDtos.ManualPaymentRequest("member-1", 250_000, Instant.parse("2026-08-10T00:00:00Z"), "unique-key-000000", "cash"), "admin");
 
     assertThat(result.unallocatedAmount()).isZero(); assertThat(result.allocations()).extracting(ApiDtos.AllocationResponse::duePeriodId).containsExactly("july", "aug"); assertThat(july.amountPaid).isEqualTo(100_000); assertThat(july.status).isEqualTo(DueStatus.PAID); assertThat(august.amountPaid).isEqualTo(150_000); assertThat(august.status).isEqualTo(DueStatus.PARTIAL);
+  }
+  @Test void reversesPaymentAllocationsWithoutDeletingTheLedgerRecord() {
+    DuePeriodDocument june = due("june", "2026-06", 100_000, 100_000); june.payments.add(new PaymentAllocation("payment-1", 100_000, Instant.now(), "automatic"));
+    ManualPaymentDocument payment = new ManualPaymentDocument(); payment.id = "payment-1"; payment.memberId = "member-1"; payment.amount = 100_000; payment.allocations.add(new ManualPaymentDocument.ManualAllocation("june", 100_000));
+    when(payments.findById("payment-1")).thenReturn(Optional.of(payment)); when(dues.findById("june")).thenReturn(Optional.of(june)); when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    ApiDtos.PaymentReversalResponse result = service.reverse("payment-1", "admin", "Test payment rollback");
+
+    assertThat(result.amount()).isEqualTo(100_000); assertThat(payment.reversed).isTrue(); assertThat(payment.reversalReason).isEqualTo("Test payment rollback"); assertThat(june.amountPaid).isZero(); assertThat(june.status).isEqualTo(DueStatus.UNPAID); assertThat(june.payments).isEmpty();
   }
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = DueStatus.UNPAID; return value; }
 }
