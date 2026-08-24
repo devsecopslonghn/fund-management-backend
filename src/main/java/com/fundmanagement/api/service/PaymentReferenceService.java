@@ -19,6 +19,22 @@ public class PaymentReferenceService {
 
   public PaymentReferenceService(PaymentReferenceRepository references) { this.references = references; }
 
+  /** Returns the stable annual reference used by all payment plans for a member in a year. */
+  public String referenceForYear(String memberId, int year) {
+    if (memberId == null || memberId.isBlank() || year < 2000 || year > 9999) throw new IllegalArgumentException("Payment reference scope is invalid");
+    var existing = references.findByMemberIdAndYear(memberId, year);
+    if (existing.isPresent()) return existing.get().code;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      PaymentReferenceDocument candidate = new PaymentReferenceDocument(); candidate.id = UUID.randomUUID().toString(); candidate.memberId = memberId; candidate.year = year; candidate.code = randomCode(); candidate.createdAt = Instant.now();
+      try { return references.insert(candidate).code; }
+      catch (DuplicateKeyException race) {
+        var concurrent = references.findByMemberIdAndYear(memberId, year);
+        if (concurrent.isPresent()) return concurrent.get().code;
+      }
+    }
+    throw new IllegalStateException("Could not allocate an annual payment reference");
+  }
+
   public String referenceFor(String memberId, String month) {
     if (memberId == null || memberId.isBlank() || month == null || month.isBlank()) throw new IllegalArgumentException("Payment reference scope is invalid");
     var existing = references.findByMemberIdAndMonth(memberId, month);

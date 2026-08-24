@@ -19,6 +19,10 @@ public class MemberDocument {
   public String phone;
   public String joinMonth;
   public String baselineMonth;
+  /** Master contribution plan entered during import/member creation. */
+  public String contributionStartMonth;
+  public Integer annualContributionMonths;
+  public List<String> initiallyPaidMonths = new ArrayList<>();
   public MemberStatus status;
   public List<ContributionRate> contributionRates = new ArrayList<>();
   public Instant createdAt;

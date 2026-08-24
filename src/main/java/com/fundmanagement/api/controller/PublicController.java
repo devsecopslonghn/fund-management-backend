@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -19,7 +20,7 @@ public class PublicController {
   private final DashboardService dashboard; private final DuesService dues;
   public PublicController(DashboardService dashboard, DuesService dues) { this.dashboard = dashboard; this.dues = dues; }
   @GetMapping("/overview") public ApiDtos.PublicOverviewResponse overview() { return dashboard.publicOverview(); }
-  @GetMapping("/payment-dashboard") public ApiDtos.PublicPaymentDashboardResponse paymentDashboard() { return dashboard.publicPaymentDashboard(); }
+  @GetMapping("/payment-dashboard") public ApiDtos.PublicPaymentDashboardResponse paymentDashboard(@RequestParam(required = false) Integer year) { return year == null ? dashboard.publicPaymentDashboard() : dashboard.publicPaymentDashboard(year); }
   /** Name lookup returns only payable due periods. It never returns contact details or payment history. */
   @PostMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@Valid @RequestBody ApiDtos.PublicPaymentOptionsRequest request) { return dues.publicPaymentOptions(request); }
   @PostMapping("/payment-intents") @ResponseStatus(HttpStatus.CREATED)

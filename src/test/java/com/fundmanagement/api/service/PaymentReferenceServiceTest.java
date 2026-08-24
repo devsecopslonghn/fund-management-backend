@@ -20,4 +20,14 @@ class PaymentReferenceServiceTest {
 
     assertThat(first).matches("[A-Z0-9]{10}"); assertThat(second).isEqualTo(first); verify(repository).insert(any(PaymentReferenceDocument.class));
   }
+  @Test void createsStableAnnualReferenceWithoutReplacingLegacyMonthReference() {
+    PaymentReferenceRepository repository = mock(PaymentReferenceRepository.class); PaymentReferenceDocument stored = new PaymentReferenceDocument();
+    when(repository.findByMemberIdAndYear("member-a", 2026)).thenReturn(Optional.empty(), Optional.of(stored));
+    when(repository.insert(any(PaymentReferenceDocument.class))).thenAnswer(invocation -> { PaymentReferenceDocument value = invocation.getArgument(0); stored.code = value.code; return value; });
+    PaymentReferenceService service = new PaymentReferenceService(repository);
+
+    String first = service.referenceForYear("member-a", 2026); String second = service.referenceForYear("member-a", 2026);
+
+    assertThat(first).matches("[A-Z0-9]{10}"); assertThat(second).isEqualTo(first); verify(repository).insert(any(PaymentReferenceDocument.class));
+  }
 }

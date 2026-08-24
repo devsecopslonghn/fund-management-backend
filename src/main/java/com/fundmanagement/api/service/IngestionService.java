@@ -7,6 +7,7 @@ import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.config.GmailProperties;
 import com.fundmanagement.api.repository.BankTransactionRepository;
 import com.fundmanagement.api.repository.PaymentIntentRepository;
+import com.fundmanagement.api.repository.PaymentReferenceRepository;
 import java.time.Instant;
 import java.time.Duration;
 import java.util.List;
@@ -21,9 +22,11 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class IngestionService {
-  private final BankTransactionRepository transactions; private final SacombankMessageParser parser; private final SettingsService settings; private final PaymentIntentRepository intents; private final PaymentService payments; private final AuditService audit; private final GmailProperties gmail; private final MongoTemplate mongo;
-  public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings) { this(transactions, parser, settings, null, null, null, null, null); }
-  @Autowired public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo) { this.transactions = transactions; this.parser = parser; this.settings = settings; this.intents = intents; this.payments = payments; this.audit = audit; this.gmail = gmail; this.mongo = mongo; }
+  private final BankTransactionRepository transactions; private final SacombankMessageParser parser; private final SettingsService settings; private final PaymentIntentRepository intents; private final PaymentService payments; private final AuditService audit; private final GmailProperties gmail; private final MongoTemplate mongo; private final PaymentReferenceRepository references;
+  public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings) { this(transactions, parser, settings, null, null, null, null, null, null); }
+  /** Compatibility constructor retained for focused tests that predate annual references. */
+  public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo) { this(transactions, parser, settings, intents, payments, audit, gmail, mongo, null); }
+  @Autowired public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo, PaymentReferenceRepository references) { this.transactions = transactions; this.parser = parser; this.settings = settings; this.intents = intents; this.payments = payments; this.audit = audit; this.gmail = gmail; this.mongo = mongo; this.references = references; }
   public ApiDtos.BankTransactionResponse ingest(ApiDtos.BankTransactionIngestionRequest request) {
     if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
     var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) {
@@ -61,9 +64,16 @@ public class IngestionService {
     if (claimed == null) return;
     try {
       List<PaymentIntentDocument> matches = intents.findByStatus(IntentStatus.PENDING).stream().filter(i -> exactIntentMatch(i, claimed)).toList();
-      if (matches.size() != 1) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); return; }
-      PaymentIntentDocument intent = matches.getFirst();
-      ApiDtos.ManualPaymentResponse payment = payments.record(new ApiDtos.ManualPaymentRequest(intent.memberId, claimed.amount, claimed.occurredAt, "gmail:" + claimed.providerMessageId, "Automatic match from configured read-only bank alert"), "system:gmail-auto");
+      PaymentIntentDocument intent = matches.size() == 1 ? matches.getFirst() : null;
+      Integer annualYear = null;
+      if (intent == null && references != null) {
+        var annualMatches = references.findAll().stream().filter(ref -> ref.year != null && transferMatches(ref.code, claimed.parsedContent)).toList();
+        if (annualMatches.size() == 1) { var annual = annualMatches.getFirst(); intent = new PaymentIntentDocument(); intent.memberId = annual.memberId; annualYear = annual.year; }
+      }
+      if (intent == null) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); return; }
+      ApiDtos.ManualPaymentResponse payment = annualYear == null
+          ? payments.record(new ApiDtos.ManualPaymentRequest(intent.memberId, claimed.amount, claimed.occurredAt, "gmail:" + claimed.providerMessageId, "Automatic match from configured read-only bank alert"), "system:gmail-auto")
+          : payments.recordAutomatic(intent.memberId, claimed.amount, claimed.occurredAt, "gmail:" + claimed.providerMessageId, annualYear, "system:gmail-auto");
       claimed.reconciliationStatus = "MATCHED"; claimed.matchedMemberId = intent.memberId; claimed.matchedDuePeriodIds = payment.allocations().stream().map(ApiDtos.AllocationResponse::duePeriodId).toList(); claimed.reviewedBy = "system:gmail-auto"; claimed.reviewedAt = Instant.now(); transactions.save(claimed);
       if (audit != null) audit.record("system:gmail-auto", "BANK_TRANSACTION_AUTO_MATCHED", "bank_transaction", claimed.id, java.util.Map.of("status", "NEEDS_REVIEW"), java.util.Map.of("status", "MATCHED", "amount", claimed.amount));
     } catch (RuntimeException failure) { claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); }

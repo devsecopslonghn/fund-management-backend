@@ -46,6 +46,26 @@ public class DashboardService {
         .toList();
     return new ApiDtos.PublicPaymentDashboardResponse(overview.balance(), overview.incomeThisMonth(), overview.expenseThisMonth(), overview.monthlySeries(), dashboardMembers);
   }
+  /** Year board used by the home page. Missing configured periods are returned as NOT_OPENED, not as debt. */
+  public ApiDtos.PublicPaymentDashboardResponse publicPaymentDashboard(int year) {
+    if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid");
+    ApiDtos.PublicOverviewResponse overview = publicOverview();
+    List<String> months = java.util.stream.IntStream.rangeClosed(1, 12).mapToObj(m -> YearMonth.of(year, m).toString()).toList();
+    List<ApiDtos.PublicPaymentDashboardMember> result = members.findByStatus(MemberStatus.ACTIVE).stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
+      var existing = dues.findByMemberIdOrderByMonthAsc(member.id).stream().collect(java.util.stream.Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
+      String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
+      YearMonth from = YearMonth.parse(start), to = from.plusMonths(count - 1L);
+      List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
+        DuePeriodDocument due = existing.get(month); YearMonth ym = YearMonth.parse(month);
+        if (due != null) return new ApiDtos.PublicPaymentDashboardDue(due.id, month, due.amountDue, due.amountPaid, Math.max(0, due.amountDue - due.amountPaid), due.status);
+        if (ym.isBefore(from) || ym.isAfter(to)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
+        long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
+      }).toList();
+      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(member), board);
+    }).toList();
+    return new ApiDtos.PublicPaymentDashboardResponse(overview.balance(), overview.incomeThisMonth(), overview.expenseThisMonth(), overview.monthlySeries(), result, year, months);
+  }
   public ApiDtos.DashboardResponse adminOverview() { Totals totals = totals(); YearMonth now = YearMonth.now(); List<MemberDocument> late = members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> { String status = publicStatus(m); return "SOME_MONTHS_MISSING".equals(status) || "OVERDUE".equals(status); }).sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).toList(); long reviewCount = transactions.findByReconciliationStatus("NEEDS_REVIEW").size(); return new ApiDtos.DashboardResponse(totals.income - totals.expense, totals.income, totals.expense, compliance(now), reviewCount, series(now), late.stream().map(memberService::toResponse).toList()); }
   private Totals totals() { return new Totals(payments.findAll().stream().mapToLong(p -> p.amount).sum(), expenses.findByDeletedFalseAndDateBetweenOrderByDateDesc(LocalDate.of(2000, 1, 1), LocalDate.now().plusYears(1)).stream().mapToLong(e -> e.amount).sum()); }
   private MonthlyTotals monthly(YearMonth month) { Instant from = month.atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC); Instant to = month.plusMonths(1).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC); long income = payments.findByOccurredAtBetween(from, to).stream().mapToLong(p -> p.amount).sum(); long expense = expenses.findByDeletedFalseAndDateBetweenOrderByDateDesc(month.atDay(1), month.atEndOfMonth()).stream().mapToLong(e -> e.amount).sum(); return new MonthlyTotals(income, expense); }

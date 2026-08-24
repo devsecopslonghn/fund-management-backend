@@ -14,6 +14,11 @@ public class PaymentIntentDocument {
   public List<String> duePeriodIds = new ArrayList<>();
   public long totalAmount;
   public String transferContent;
+  /** Immutable payment-plan snapshot metadata. */
+  public String selectionMode;
+  public Integer requestedMonthCount;
+  public String throughMonth;
+  public Integer referenceYear;
   @Indexed public Instant createdAt;
   public Instant expiresAt;
   public IntentStatus status;

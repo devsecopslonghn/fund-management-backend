@@ -48,10 +48,28 @@ public class DuesService {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
       if (month.compareTo(member.baselineMonth) < 0 || dues.findByMemberIdAndMonth(member.id, month).isPresent()) { skipped++; continue; }
-      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = 0; due.status = DueStatus.UNPAID;
+      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = initiallyPaid(member, month) ? due.amountDue : 0; due.status = status(due);
       try { dues.save(due); if (paymentReferences != null) paymentReferences.referenceFor(member.id, month); created++; } catch (DuplicateKeyException duplicate) { skipped++; }
     }
     return new ApiDtos.GenerationResult(month, created, skipped);
+  }
+
+  /** Generates the configured master plan for one calendar year. This is intended for onboarding/import and is idempotent. */
+  public ApiDtos.YearGenerationResult generateYear(int year) {
+    if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid");
+    int created = 0, skipped = 0, initiallyPaid = 0;
+    for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
+      String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
+      YearMonth first = YearMonth.of(year, 1); YearMonth last = first.plusMonths(11); YearMonth planStart = YearMonth.parse(start); YearMonth planEnd = planStart.plusMonths(count - 1L);
+      for (YearMonth month = first; !month.isAfter(last); month = month.plusMonths(1)) {
+        if (month.isBefore(planStart) || month.isAfter(planEnd)) { skipped++; continue; }
+        if (dues.findByMemberIdAndMonth(member.id, month.toString()).isPresent()) { skipped++; continue; }
+        DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month.toString(); due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.status = status(due);
+        try { dues.save(due); created++; if (due.amountPaid > 0) initiallyPaid++; } catch (DuplicateKeyException duplicate) { skipped++; }
+      }
+    }
+    return new ApiDtos.YearGenerationResult(year, created, skipped, initiallyPaid);
   }
 
   public ApiDtos.DuePeriodPageResponse list(int page, int size, String month, String memberId) {
@@ -93,8 +111,9 @@ public class DuesService {
     List<MemberDocument> matches = matchingPublicMembers(request.fullName());
     if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
     MemberDocument member = resolvePublicMember(matches, request.memberCode());
-    Set<String> requested = new HashSet<>(request.duePeriodIds());
-    if (requested.size() != request.duePeriodIds().size()) throw new IllegalArgumentException("Due periods must not be duplicated");
+    List<String> requestedIds = resolveSelection(member, request);
+    Set<String> requested = new HashSet<>(requestedIds);
+    if (requested.size() != requestedIds.size()) throw new IllegalArgumentException("Due periods must not be duplicated");
     List<DuePeriodDocument> periods = dues.findByMemberIdAndIdIn(member.id, requested);
     if (periods.size() != requested.size()) throw new IllegalArgumentException("One or more due periods are invalid");
     long amount = 0;
@@ -104,7 +123,7 @@ public class DuesService {
       try { amount = Math.addExact(amount, outstanding); } catch (ArithmeticException ex) { throw new IllegalArgumentException("Payment amount is too large"); }
     }
     String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow();
-    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().map(p -> p.id).toList(); intent.totalAmount = amount; intent.transferContent = paymentReferences == null ? "QUY " + member.memberCode + " " + month.substring(5, 7) + month.substring(0, 4) : paymentReferences.referenceFor(member.id, month); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
+    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().sorted(Comparator.comparing(p -> p.month)).map(p -> p.id).toList(); intent.totalAmount = amount; intent.referenceYear = Integer.parseInt(month.substring(0, 4)); intent.selectionMode = request.selectionMode() == null || request.selectionMode().isBlank() ? "EXPLICIT" : request.selectionMode(); intent.requestedMonthCount = request.monthCount(); intent.throughMonth = request.throughMonth(); intent.transferContent = annualReference(member.id, intent.referenceYear, month); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
     if (detectionWindow != null) detectionWindow.open(java.time.Duration.ofMinutes(5));
     triggerImmediateGmailPoll();
     recordAudit("PUBLIC_PAYMENT_INTENT_CREATED", member.id);
@@ -124,6 +143,22 @@ public class DuesService {
     ApiDtos.PublicPaymentIntentResponse response = toPublicResponse(intent);
     return new ApiDtos.PublicPaymentIntentDetailsResponse(response.id(), response.amount(), response.transferContent(), response.qrImageUrl(), response.accountHolder(), response.accountNumber(), response.bankName(), response.expiresAt(), response.status());
   }
+  private List<String> resolveSelection(MemberDocument member, ApiDtos.PublicPaymentIntentRequest request) {
+    String mode = request.selectionMode() == null || request.selectionMode().isBlank() ? "EXPLICIT" : request.selectionMode();
+    if ("EXPLICIT".equals(mode)) return request.duePeriodIds() == null ? List.of() : request.duePeriodIds();
+    List<DuePeriodDocument> outstanding = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).sorted(Comparator.comparing(p -> p.month)).toList();
+    if ("ALL_OUTSTANDING".equals(mode)) return outstanding.stream().map(p -> p.id).toList();
+    if ("MONTH_COUNT".equals(mode)) { if (request.monthCount() == null) throw new IllegalArgumentException("monthCount is required"); return outstanding.stream().limit(request.monthCount()).map(p -> p.id).toList(); }
+    if ("THROUGH_MONTH".equals(mode)) { if (request.throughMonth() == null) throw new IllegalArgumentException("throughMonth is required"); parseMonth(request.throughMonth()); return outstanding.stream().filter(p -> p.month.compareTo(request.throughMonth()) <= 0).map(p -> p.id).toList(); }
+    throw new IllegalArgumentException("Unsupported payment selection mode");
+  }
+  private String annualReference(String memberId, int year, String legacyMonth) {
+    if (paymentReferences == null) return "QUY " + legacyMonth.substring(5, 7) + legacyMonth.substring(0, 4);
+    String annual = paymentReferences.referenceForYear(memberId, year);
+    // Mockito/legacy test doubles may not implement annual allocation yet; preserve the old reference fallback.
+    return annual == null || annual.isBlank() ? paymentReferences.referenceFor(memberId, legacyMonth) : annual;
+  }
+  private boolean initiallyPaid(MemberDocument member, String month) { return member.initiallyPaidMonths != null && member.initiallyPaidMonths.contains(month); }
   private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }
   private boolean hasOutstanding(DuePeriodDocument period) { return outstanding(period) > 0; }
   private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }
@@ -134,7 +169,7 @@ public class DuesService {
     gmailPollingWorker.ifPresent(worker -> { try { taskExecutor.execute(worker::pollNow); } catch (RuntimeException ignored) { /* QR creation remains available if the background executor is saturated. */ } });
   }
   private void recordAudit(String action, String memberId) { if (audit != null) audit.record("anonymous", action, "member", memberId, Map.of(), Map.of()); }
-  private ApiDtos.PublicPaymentIntentResponse toPublicResponse(PaymentIntentDocument intent) { ApiDtos.SettingsResponse current = currentSettings(); String url = properties.getQrImageBaseUrl() + "/" + current.bankCode() + "-" + current.accountNumber() + "-compact2.png?amount=" + intent.totalAmount + "&addInfo=" + URLEncoder.encode(intent.transferContent, StandardCharsets.UTF_8) + "&accountName=" + URLEncoder.encode(current.accountHolder(), StandardCharsets.UTF_8); return new ApiDtos.PublicPaymentIntentResponse(intent.id, intent.totalAmount, intent.transferContent, url, current.accountHolder(), current.accountNumber(), current.bankName(), intent.expiresAt, intent.status); }
+  private ApiDtos.PublicPaymentIntentResponse toPublicResponse(PaymentIntentDocument intent) { ApiDtos.SettingsResponse current = currentSettings(); String url = properties.getQrImageBaseUrl() + "/" + current.bankCode() + "-" + current.accountNumber() + "-compact2.png?amount=" + intent.totalAmount + "&addInfo=" + URLEncoder.encode(intent.transferContent, StandardCharsets.UTF_8) + "&accountName=" + URLEncoder.encode(current.accountHolder(), StandardCharsets.UTF_8); List<ApiDtos.PaymentPlanPeriod> plan = dues.findAllById(intent.duePeriodIds).stream().sorted(Comparator.comparing(p -> p.month)).map(p -> new ApiDtos.PaymentPlanPeriod(p.id, p.month, p.amountDue, p.amountPaid, outstanding(p))).toList(); return new ApiDtos.PublicPaymentIntentResponse(intent.id, intent.totalAmount, intent.transferContent, url, current.accountHolder(), current.accountNumber(), current.bankName(), intent.expiresAt, intent.status, plan); }
   private ApiDtos.SettingsResponse currentSettings() { if (settings != null) return settings.get(); return new ApiDtos.SettingsResponse(properties.getDefaultContributionAmount(), properties.getAutoReconciliationThreshold(), properties.getBankName(), properties.getBankCode(), properties.getAccountNumber(), properties.getAccountHolder(), properties.isDueSchedulerEnabled(), properties.isStartupCatchUpEnabled(), properties.isIngestionEnabled(), properties.isGmailEnabled(), properties.getGmailSenderFilter(), properties.isSmtpEnabled(), properties.getSmtpHost(), properties.getSmtpPort(), properties.getSmtpFrom()); }
   private void parseMonth(String month) { try { YearMonth.parse(month); } catch (RuntimeException ex) { throw new IllegalArgumentException("Month must be YYYY-MM"); } }
 }

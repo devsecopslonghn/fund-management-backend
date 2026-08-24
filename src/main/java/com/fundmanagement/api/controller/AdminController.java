@@ -40,6 +40,8 @@ public class AdminController {
   @PutMapping("/members/{id}") public ApiDtos.MemberResponse updateMember(@PathVariable String id, @Valid @RequestBody ApiDtos.MemberUpsertRequest request, Principal principal) { return members.update(id, request, principal.getName()); }
   @DeleteMapping("/members/{id}") @ResponseStatus(HttpStatus.NO_CONTENT) public void deleteMember(@PathVariable String id, Principal principal) { members.deactivate(id, principal.getName()); }
   @PostMapping("/dues/generate") public ApiDtos.GenerationResult generateDues(@RequestParam String month) { return dues.generate(month); }
+  /** One-time/onboarding generation from each member's master contribution plan. */
+  @PostMapping("/dues/generate-year") public ApiDtos.YearGenerationResult generateDuesYear(@RequestParam int year) { return dues.generateYear(year); }
   @GetMapping("/dues") public ApiDtos.DuePeriodPageResponse listDues(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size, @RequestParam(required = false) String month, @RequestParam(required = false) String memberId) { return dues.list(page, size, month, memberId); }
   @GetMapping("/dues/{id}") public ApiDtos.AdminDuePeriodResponse dueDetail(@PathVariable String id) { return dues.detail(id); }
   @PostMapping("/dues/{id}/adjustment") public ApiDtos.AdminDuePeriodResponse adjustDue(@PathVariable String id, @Valid @RequestBody ApiDtos.DueAdjustmentRequest request, Principal principal) { return dues.adjust(id, request, principal.getName()); }

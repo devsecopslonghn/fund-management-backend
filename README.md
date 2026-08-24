@@ -130,6 +130,22 @@ A client–server internal web app:
 
 ## 4. Functional Requirements
 
+### 4.0 Master contribution plan and annual payment reference (2026 update)
+
+At onboarding or member creation, Admin imports a master plan containing the
+contribution start month, the number of contribution months in the plan year,
+and any months already paid in the source workbook. The year-generation
+operation is idempotent and marks those imported months paid without creating a
+bank reconciliation record. New QR/payment intents use one opaque random
+10-character reference per member/year; legacy member/month references remain
+readable for historical transactions. A payment plan snapshots its selected
+due-period IDs and server-calculated total. Selection can be explicit, all
+outstanding periods, a month count, or all periods through a selected month.
+Bank alerts containing a unique annual reference are automatically allocated
+oldest-first within that year; underpayments remain partial and excess is
+retained as an unallocated member credit on the payment ledger. No Admin review
+is required for a unique, configured annual reference.
+
 Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
 ### 4.1 Module A — Member Management
