@@ -32,4 +32,17 @@ class BasicSacombankMessageParserTest {
     assertThat(result.parsedContent()).contains("5H4Z0PO787"); assertThat(result.availableBalance()).isEqualTo(198_000L);
     assertThat(result.occurredAt()).isEqualTo(java.time.Instant.parse("2026-08-24T02:08:00Z"));
   }
+  @Test void parsesBilingualLabelsWhenHtmlPlacesEachCellOnItsOwnLine() {
+    var raw = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n"
+        + "Tài khoản/Account\r\n066007102000\r\n"
+        + "Ngày/Date\r\n24/08/2026 09:08\r\n"
+        + "Phát sinh/Transaction\r\n+ 100,000 VND\r\n"
+        + "Số dư khả dụng/Available balance\r\n198,000 VND\r\n"
+        + "Nội dung/Description\r\nEWX615212750 QUY LONGHN42244 082026\r\n";
+    var result = parser.parse(raw);
+    assertThat(result.accountNumber()).isEqualTo("066007102000");
+    assertThat(result.amount()).isEqualTo(100_000L);
+    assertThat(result.parsedContent()).contains("EWX615212750");
+    assertThat(result.availableBalance()).isEqualTo(198_000L);
+  }
 }

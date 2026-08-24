@@ -34,6 +34,14 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
   @Override public ParsedBankMessage parse(String rawPayload) {
     if (rawPayload == null || rawPayload.isBlank()) throw new IllegalArgumentException("Empty bank message");
     String raw = readablePayload(rawPayload).replace("&nbsp;", " ").replaceAll("<[^>]*>", " ");
+    // Sacombank's bilingual HTML labels can be separated from their value by
+    // a line break. Collapse the label pair before applying line-oriented
+    // key/value patterns so we never persist "Description" as the content.
+    raw = raw.replaceAll("(?i)tài khoản\\s*/\\s*account", "Account")
+        .replaceAll("(?i)nội dung\\s*/\\s*description", "Description")
+        .replaceAll("(?i)ngày\\s*/\\s*date", "Date")
+        .replaceAll("(?i)phát sinh\\s*/\\s*transaction", "Transaction")
+        .replaceAll("(?i)số dư khả dụng\\s*/\\s*available balance", "Available balance");
     Matcher labeled = LABELED_AMOUNT.matcher(raw); Matcher signed = SIGNED_AMOUNT.matcher(raw);
     String sign = null; String amountText = null;
     if (labeled.find()) { sign = labeled.group(1); amountText = labeled.group(2); }
