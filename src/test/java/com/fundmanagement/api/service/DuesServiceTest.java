@@ -22,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.TaskExecutor;
 
 @ExtendWith(MockitoExtension.class)
 class DuesServiceTest {
@@ -31,6 +32,8 @@ class DuesServiceTest {
   @Mock MemberService memberService;
   @Mock SettingsService settings;
   @Mock PaymentDetectionWindowService detectionWindow;
+  @Mock GmailPollingWorker gmailPollingWorker;
+  @Mock TaskExecutor taskExecutor;
 
   @Test void generatesOneDueForEligibleActiveMemberAndSkipsExistingPeriod() {
     MemberDocument first = member("m-1", "2026-07"); MemberDocument second = member("m-2", "2026-09");
@@ -108,6 +111,17 @@ class DuesServiceTest {
 
     assertThat(result.bankName()).isEqualTo("Sacombank Updated"); assertThat(result.accountNumber()).isEqualTo("99887766"); assertThat(result.accountHolder()).isEqualTo("UPDATED FUND HOLDER"); assertThat(result.qrImageUrl()).contains("970499-99887766");
     verify(detectionWindow).open(java.time.Duration.ofMinutes(5));
+  }
+  @Test void creatingPublicIntentQueuesOneImmediateGmailPoll() {
+    MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
+    DuePeriodDocument unpaid = due("due-1", "2026-08", 100_000, 0);
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(member)); when(memberService.normalizeName(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class).trim().replaceAll("\\s+", " ").toLowerCase());
+    when(dues.findByMemberIdAndIdIn("m-1", java.util.Set.of("due-1"))).thenReturn(List.of(unpaid)); when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    org.mockito.Mockito.doAnswer(invocation -> { ((Runnable) invocation.getArgument(0)).run(); return null; }).when(taskExecutor).execute(any(Runnable.class));
+    FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("123456789"); properties.setAccountHolder("TEST FUND");
+    DuesService service = new DuesService(members, dues, intents, memberService, properties, null, null, detectionWindow, java.util.Optional.of(gmailPollingWorker), taskExecutor);
+    service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
+    verify(detectionWindow).open(java.time.Duration.ofMinutes(5)); verify(taskExecutor).execute(any(Runnable.class)); verify(gmailPollingWorker).pollNow();
   }
 
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = paid >= due ? com.fundmanagement.api.domain.DueStatus.PAID : com.fundmanagement.api.domain.DueStatus.PARTIAL; return value; }

@@ -28,4 +28,9 @@ class GmailPollingWorkerTest {
     new GmailPollingWorker(mailbox, ingestion, lease, window).fastPoll(); verifyNoInteractions(mailbox, ingestion, lease);
     when(window.isActive()).thenReturn(true); new GmailPollingWorker(mailbox, ingestion, lease, window).poll(); verifyNoInteractions(mailbox, ingestion, lease);
   }
+  @Test void immediatePollUsesTheSameLeaseProtectedPath() {
+    var handle = new GmailPollingLeaseService.LeaseHandle("pod-a", "token"); when(lease.tryAcquire()).thenReturn(java.util.Optional.of(handle));
+    new GmailPollingWorker(mailbox, ingestion, lease).pollNow();
+    verify(mailbox).fetchUnreadSacombankMessages(); verify(lease).release(handle);
+  }
 }

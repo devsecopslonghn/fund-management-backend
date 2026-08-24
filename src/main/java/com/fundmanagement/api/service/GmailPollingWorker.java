@@ -26,6 +26,8 @@ public class GmailPollingWorker {
     if (detectionWindow == null || !safeWindowActive()) return;
     runPoll();
   }
+  /** Queued after a payment intent is created so a just-arrived alert is not delayed five seconds. */
+  public void pollNow() { runPoll(); }
   private void runPoll() {
     Optional<GmailPollingLeaseService.LeaseHandle> acquired;
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }

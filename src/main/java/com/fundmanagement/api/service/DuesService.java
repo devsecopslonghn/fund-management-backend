@@ -26,18 +26,19 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Page;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DuesService {
-  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow;
+  private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow; private final java.util.Optional<GmailPollingWorker> gmailPollingWorker; private final TaskExecutor taskExecutor;
   /** Test-friendly constructor; production uses the audited constructor below. */
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null); }
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null, java.util.Optional.empty(), null); }
   /** Test-friendly constructor with persisted settings. */
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings) { this(members, dues, intents, memberService, properties, null, settings, null); }
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings) { this(members, dues, intents, memberService, properties, null, settings, null, java.util.Optional.empty(), null); }
   /** Test-friendly constructor with settings and the optional detection window. */
-  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings, PaymentDetectionWindowService detectionWindow) { this(members, dues, intents, memberService, properties, null, settings, detectionWindow); }
-  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; }
+  public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, SettingsService settings, PaymentDetectionWindowService detectionWindow) { this(members, dues, intents, memberService, properties, null, settings, detectionWindow, java.util.Optional.empty(), null); }
+  @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, java.util.Optional<GmailPollingWorker> gmailPollingWorker, TaskExecutor taskExecutor) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; this.gmailPollingWorker = gmailPollingWorker; this.taskExecutor = taskExecutor; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
@@ -100,6 +101,7 @@ public class DuesService {
     String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow();
     PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().map(p -> p.id).toList(); intent.totalAmount = amount; intent.transferContent = "QUY " + member.memberCode + " " + month.substring(5, 7) + month.substring(0, 4); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
     if (detectionWindow != null) detectionWindow.open(java.time.Duration.ofMinutes(5));
+    triggerImmediateGmailPoll();
     recordAudit("PUBLIC_PAYMENT_INTENT_CREATED", member.id);
     return toPublicResponse(intent);
   }
@@ -115,6 +117,10 @@ public class DuesService {
   private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }
   private MemberDocument resolvePublicMember(List<MemberDocument> matches, String memberCode) { if (matches.size() > 1 && isBlank(memberCode)) throw new IllegalArgumentException("Member code is required for duplicate names"); String normalizedCode = isBlank(memberCode) ? null : memberCode.trim().toUpperCase(Locale.ROOT); return matches.stream().filter(m -> normalizedCode == null || normalizedCode.equals(m.memberCode)).findFirst().orElseThrow(() -> new IllegalArgumentException("No matching member found")); }
   private boolean isBlank(String value) { return value == null || value.isBlank(); }
+  private void triggerImmediateGmailPoll() {
+    if (taskExecutor == null) return;
+    gmailPollingWorker.ifPresent(worker -> { try { taskExecutor.execute(worker::pollNow); } catch (RuntimeException ignored) { /* QR creation remains available if the background executor is saturated. */ } });
+  }
   private void recordAudit(String action, String memberId) { if (audit != null) audit.record("anonymous", action, "member", memberId, Map.of(), Map.of()); }
   private ApiDtos.PublicPaymentIntentResponse toPublicResponse(PaymentIntentDocument intent) { ApiDtos.SettingsResponse current = currentSettings(); String url = properties.getQrImageBaseUrl() + "/" + current.bankCode() + "-" + current.accountNumber() + "-compact2.png?amount=" + intent.totalAmount + "&addInfo=" + URLEncoder.encode(intent.transferContent, StandardCharsets.UTF_8) + "&accountName=" + URLEncoder.encode(current.accountHolder(), StandardCharsets.UTF_8); return new ApiDtos.PublicPaymentIntentResponse(intent.id, intent.totalAmount, intent.transferContent, url, current.accountHolder(), current.accountNumber(), current.bankName(), intent.expiresAt, intent.status); }
   private ApiDtos.SettingsResponse currentSettings() { if (settings != null) return settings.get(); return new ApiDtos.SettingsResponse(properties.getDefaultContributionAmount(), properties.getAutoReconciliationThreshold(), properties.getBankName(), properties.getBankCode(), properties.getAccountNumber(), properties.getAccountHolder(), properties.isDueSchedulerEnabled(), properties.isStartupCatchUpEnabled(), properties.isIngestionEnabled(), properties.isGmailEnabled(), properties.getGmailSenderFilter(), properties.isSmtpEnabled(), properties.getSmtpHost(), properties.getSmtpPort(), properties.getSmtpFrom()); }
