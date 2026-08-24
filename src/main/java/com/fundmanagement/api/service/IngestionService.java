@@ -26,12 +26,14 @@ public class IngestionService {
   @Autowired public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo) { this.transactions = transactions; this.parser = parser; this.settings = settings; this.intents = intents; this.payments = payments; this.audit = audit; this.gmail = gmail; this.mongo = mongo; }
   public ApiDtos.BankTransactionResponse ingest(ApiDtos.BankTransactionIngestionRequest request) {
     if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
-    var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) { tryAutoMatch(existing.get()); return response(existing.get()); }
+    var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) {
+      BankTransactionDocument current = existing.get();
+      if (!"MATCHED".equals(current.reconciliationStatus) && !"IGNORED".equals(current.reconciliationStatus)) reparse(current);
+      tryAutoMatch(current); return response(current);
+    }
     BankTransactionDocument tx = new BankTransactionDocument(); tx.providerMessageId = request.providerMessageId().trim(); tx.rawPayload = request.rawPayload(); tx.createdAt = Instant.now(); tx.reconciliationStatus = "PARSE_FAILED";
     try {
-      SacombankMessageParser.ParsedBankMessage parsed = parser.parse(request.rawPayload());
-      if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) throw new IllegalArgumentException("Bank message was not for the configured receiving account");
-      tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.reconciliationStatus = "NEEDS_REVIEW";
+      applyParsed(tx, parser.parse(request.rawPayload()));
     } catch (IllegalArgumentException ex) {
       if ("Bank message was not for the configured receiving account".equals(ex.getMessage())) throw ex;
       tx.occurredAt = tx.createdAt;
@@ -40,6 +42,14 @@ public class IngestionService {
     catch (DuplicateKeyException duplicate) { BankTransactionDocument duplicateRecord = transactions.findByProviderMessageId(request.providerMessageId()).orElseThrow(() -> duplicate); tryAutoMatch(duplicateRecord); return response(duplicateRecord); }
   }
   private boolean sameAccount(String actual, String expected) { String left = normalizeDigits(actual); String right = normalizeDigits(expected); return left != null && right != null && !right.isBlank() && right.equals(left); }
+  private void reparse(BankTransactionDocument tx) {
+    try { applyParsed(tx, parser.parse(tx.rawPayload)); transactions.save(tx); }
+    catch (IllegalArgumentException ignored) { /* Keep the existing record for admin review. */ }
+  }
+  private void applyParsed(BankTransactionDocument tx, SacombankMessageParser.ParsedBankMessage parsed) {
+    if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) throw new IllegalArgumentException("Bank message was not for the configured receiving account");
+    tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.reconciliationStatus = "NEEDS_REVIEW";
+  }
   private String normalizeDigits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
 
   /** Claims a transaction atomically before matching, so two replicas cannot allocate it twice. */

@@ -1,16 +1,20 @@
 package com.fundmanagement.api.service;
 
 import com.fundmanagement.api.config.GmailProperties;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Opt-in polling fallback; duplicate Gmail deliveries are absorbed by providerMessageId. */
 @Component
 @ConditionalOnProperty(prefix = "app.gmail", name = "polling-enabled", havingValue = "true")
 public class GmailPollingWorker {
+  private static final Logger log = LoggerFactory.getLogger(GmailPollingWorker.class);
   private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow;
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
   public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null); }
@@ -33,10 +37,13 @@ public class GmailPollingWorker {
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }
     if (acquired.isEmpty()) return;
     try {
-      for (MailboxIngestionPort.MailboxMessage message : mailbox.fetchUnreadSacombankMessages()) {
-        try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); } catch (RuntimeException ignored) { /* Continue safely; provider IDs make retries idempotent. */ }
+      List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchUnreadSacombankMessages();
+      log.info("Gmail poll fetched {} candidate bank alert(s)", messages.size());
+      for (MailboxIngestionPort.MailboxMessage message : messages) {
+        try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); }
+        catch (RuntimeException failure) { log.warn("Gmail bank alert ingestion failed: {}", failure.getMessage()); }
       }
-    } catch (RuntimeException ignored) { /* Lease is always released; next interval retries. */ }
+    } catch (RuntimeException failure) { log.warn("Gmail poll failed: {}", failure.getMessage()); }
     finally { try { leaseService.release(acquired.get()); } catch (RuntimeException ignored) { /* TTL expiry remains the fallback. */ } }
   }
   private boolean safeWindowActive() { try { return detectionWindow.isActive(); } catch (RuntimeException ignored) { return false; } }

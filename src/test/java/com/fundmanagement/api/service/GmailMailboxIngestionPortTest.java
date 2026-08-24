@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 class GmailMailboxIngestionPortTest {
   @Test void searchAlwaysContainsTheConfiguredReceivingAccount() {
     assertThat(GmailMailboxIngestionPort.gmailSearchQuery("alerts@example.test", "000 123-456"))
-        .isEqualTo("is:unread from:alerts@example.test \"000123456\"");
+        .isEqualTo("from:alerts@example.test \"000123456\"");
   }
 
   @Test void searchFailsClosedWithoutAConfiguredReceivingAccount() {

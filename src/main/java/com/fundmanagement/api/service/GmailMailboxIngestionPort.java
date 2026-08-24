@@ -31,7 +31,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   static String gmailSearchQuery(String sender, String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    return "is:unread from:" + sender + " \"" + digits + "\"";
+    // Do not require unread: opening the bank alert must not prevent a later
+    // poll from reconciling it. Provider message IDs keep repeated reads idempotent.
+    return "from:" + sender + " \"" + digits + "\"";
   }
   private String rawMessage(String mailbox, String id, String token) { JsonNode body = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=raw", token); String raw = body.path("raw").asText(""); if (raw.isBlank()) throw new IllegalStateException("Gmail message payload was empty"); try { return new String(Base64.getUrlDecoder().decode(raw), StandardCharsets.UTF_8); } catch (IllegalArgumentException ex) { throw new IllegalStateException("Gmail message payload was invalid"); } }
   private JsonNode get(String url, String token) { try { HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail API request failed"); return mapper.readTree(response.body()); } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail API request failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail API request interrupted", ex); } }
