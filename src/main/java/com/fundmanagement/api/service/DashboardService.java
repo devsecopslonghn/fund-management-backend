@@ -70,12 +70,12 @@ public class DashboardService {
       int count = 14;
       YearMonth from = YearMonth.parse(start);
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
+        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         DuePeriodDocument due = existing.get(month);
         if (due != null) return new ApiDtos.PublicPaymentDashboardDue(due.id, month, due.amountDue, due.amountPaid, Math.max(0, due.amountDue - due.amountPaid), due.status);
-        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
       }).toList();
-      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(dueByMember.getOrDefault(member.id, List.of())), board);
+      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(member, dueByMember.getOrDefault(member.id, List.of())), board);
     }).toList();
     return new ApiDtos.PublicPaymentDashboardResponse(overview.balance(), overview.incomeThisMonth(), overview.expenseThisMonth(), overview.monthlySeries(), result, year, months);
   }
@@ -97,12 +97,12 @@ public class DashboardService {
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
       int count = 14;
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
+        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         DuePeriodDocument d = existing.get(month);
         if (d != null) return new ApiDtos.PublicPaymentDashboardDue(d.id, month, d.amountDue, d.amountPaid, Math.max(0, d.amountDue - d.amountPaid), d.status);
-        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
       }).toList();
-      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, latestRate(member), publicStatus(byMember.getOrDefault(member.id, List.of())), board);
+      return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, latestRate(member), publicStatus(member, byMember.getOrDefault(member.id, List.of())), board);
     }).toList();
     YearMonth now = YearMonth.now(); MonthlyTotals current = monthly(now);
     return new ApiDtos.PublicContributionBoardResponse(ledgerBalance(), current.income, current.expense, series(now), result, year, months);
@@ -114,7 +114,12 @@ public class DashboardService {
   private int compliance(YearMonth month) { List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); if (active.isEmpty()) return 100; long paid = active.stream().filter(m -> dues.findByMemberIdAndMonth(m.id, month.toString()).map(d -> d.status == DueStatus.PAID || d.status == DueStatus.OVERPAID).orElse(false)).count(); return (int) Math.round(paid * 100.0 / active.size()); }
   private ApiDtos.PublicOverviewResponse overview(List<MemberDocument> active, Map<String, List<DuePeriodDocument>> dueByMember) { Totals totals = totals(); YearMonth now = YearMonth.now(); MonthlyTotals current = monthly(now); long paid = active.stream().filter(m -> dueByMember.getOrDefault(m.id, List.of()).stream().anyMatch(d -> now.toString().equals(d.month) && (d.status == DueStatus.PAID || d.status == DueStatus.OVERPAID))).count(); int compliance = active.isEmpty() ? 100 : (int) Math.round(paid * 100.0 / active.size()); List<ApiDtos.PublicMemberStatus> status = active.stream().map(m -> new ApiDtos.PublicMemberStatus(m.fullName, publicStatus(dueByMember.getOrDefault(m.id, List.of())))).toList(); return new ApiDtos.PublicOverviewResponse(totals.income - totals.expense, current.income, current.expense, compliance, series(now), status); }
   private Map<String, List<DuePeriodDocument>> dueByMember(List<MemberDocument> active) { if (active.isEmpty()) return Map.of(); List<String> ids = active.stream().map(m -> m.id).toList(); return dues.findByMemberIdInOrderByMonthAsc(ids).stream().collect(Collectors.groupingBy(d -> d.memberId, HashMap::new, Collectors.toList())); }
-  private String publicStatus(MemberDocument member) { return publicStatus(dues.findByMemberIdOrderByMonthAsc(member.id)); }
+  private String publicStatus(MemberDocument member) { return publicStatus(member, dues.findByMemberIdOrderByMonthAsc(member.id)); }
+  private String publicStatus(MemberDocument member, List<DuePeriodDocument> all) { return publicStatus(all.stream().filter(due -> inMemberPlan(member, due.month)).toList()); }
+  private boolean inMemberPlan(MemberDocument member, String period) {
+    String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+    return start != null && ContributionPeriod.isRegularMonth(start) && period != null && ContributionPeriod.isValid(period) && ContributionPeriod.inPlan(period, start, 14);
+  }
   private String publicStatus(List<DuePeriodDocument> all) { if (all.isEmpty()) return "NO_DUE_PERIODS"; long outstanding = all.stream().filter(d -> d.amountPaid < d.amountDue).count(); if (outstanding == 0) return "UP_TO_DATE"; return outstanding == 1 ? "SOME_MONTHS_MISSING" : "OVERDUE"; }
   private long ledgerBalance() { Totals totals = totals(); return totals.income - totals.expense; }
   private MonthlyTotals ledgerMonth(int year, int month) { return monthly(YearMonth.of(year, month)); }

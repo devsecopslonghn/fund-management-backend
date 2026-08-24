@@ -210,7 +210,7 @@ public class DuesService {
       return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
     }
     MemberDocument member = resolvePublicMember(matches, request.memberCode());
-    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
+    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(p -> inMemberPlan(member, p.month)).filter(this::hasOutstanding).map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
     recordAudit("PUBLIC_PAYMENT_LOOKUP", member.id);
     return new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch(member.fullName, isBlank(request.memberCode()) ? null : member.memberCode)), payable);
   }
@@ -234,6 +234,7 @@ public class DuesService {
     if (year != null) ensureYearPlan(member, year);
     List<ApiDtos.PublicDuePeriodResponse> payable = dues.findPublicByMemberIdOrderByMonthAsc(member.id).stream()
         .filter(p -> year == null || (p.month != null && p.month.startsWith(year + "-")))
+        .filter(p -> inMemberPlan(member, p.month))
         .filter(this::hasOutstanding)
         .map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
     recordAudit("PUBLIC_PAYMENT_LOOKUP", member.id);
@@ -282,7 +283,7 @@ public class DuesService {
   private List<String> resolveSelection(MemberDocument member, ApiDtos.PublicPaymentIntentRequest request) {
     String mode = request.selectionMode() == null || request.selectionMode().isBlank() ? "EXPLICIT" : request.selectionMode();
     if ("EXPLICIT".equals(mode)) return request.duePeriodIds() == null ? List.of() : request.duePeriodIds();
-    List<DuePeriodDocument> outstanding = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).sorted(Comparator.comparing(p -> p.month)).toList();
+    List<DuePeriodDocument> outstanding = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(p -> inMemberPlan(member, p.month)).filter(this::hasOutstanding).sorted(Comparator.comparing(p -> p.month)).toList();
     if ("ALL_OUTSTANDING".equals(mode)) return outstanding.stream().map(p -> p.id).toList();
     if ("MONTH_COUNT".equals(mode)) { if (request.monthCount() == null) throw new IllegalArgumentException("monthCount is required"); return outstanding.stream().limit(request.monthCount()).map(p -> p.id).toList(); }
     if ("THROUGH_MONTH".equals(mode)) { if (request.throughMonth() == null) throw new IllegalArgumentException("throughMonth is required"); ContributionPeriod.validate(request.throughMonth()); return outstanding.stream().filter(p -> ContributionPeriod.comparator().compare(p.month, request.throughMonth()) <= 0).map(p -> p.id).toList(); }
@@ -295,6 +296,10 @@ public class DuesService {
     return annual == null || annual.isBlank() ? paymentReferences.referenceFor(memberId, legacyMonth) : annual;
   }
   private boolean initiallyPaid(MemberDocument member, String month) { return member.initiallyPaidMonths != null && member.initiallyPaidMonths.contains(month); }
+  private boolean inMemberPlan(MemberDocument member, String period) {
+    String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+    return start != null && ContributionPeriod.isRegularMonth(start) && period != null && ContributionPeriod.isValid(period) && ContributionPeriod.inPlan(period, start, 14);
+  }
   /**
    * Materializes the member's configured annual master plan before returning
    * payment options. The board may project missing periods for display, but a
