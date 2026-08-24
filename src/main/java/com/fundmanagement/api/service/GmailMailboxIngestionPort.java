@@ -22,18 +22,40 @@ import org.springframework.stereotype.Component;
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings;
   public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
-  @Override public List<MailboxMessage> fetchUnreadSacombankMessages() {
+  /**
+   * Reads every message matching the configured receiving account.
+   *
+   * <p>The query intentionally does not require an unread label. Gmail messages
+   * are paged in batches of 100 so a 30-minute reconciliation run can catch
+   * alerts that arrived while the mailbox was already opened or while the
+   * application was unavailable. Provider message IDs make repeated scans
+   * idempotent in {@link IngestionService}.
+   */
+  @Override public List<MailboxMessage> fetchSacombankMessages() {
     String token = oauth.accessToken(); String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
-    String query = URLEncoder.encode(gmailSearchQuery(properties.getSenderFilter(), expectedAccount), StandardCharsets.UTF_8); JsonNode list = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=25&q=" + query, token); List<MailboxMessage> messages = new ArrayList<>(); for (JsonNode item : list.path("messages")) { String id = item.path("id").asText(""); if (!id.isBlank()) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token))); } return messages;
+    String query = URLEncoder.encode(gmailSearchQuery(expectedAccount), StandardCharsets.UTF_8);
+    List<MailboxMessage> messages = new ArrayList<>();
+    String pageToken = "";
+    do {
+      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
+      if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
+      JsonNode list = get(url, token);
+      for (JsonNode item : list.path("messages")) {
+        String id = item.path("id").asText("");
+        if (!id.isBlank()) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
+      }
+      pageToken = list.path("nextPageToken").asText("");
+    } while (!pageToken.isBlank());
+    return messages;
   }
-  static String gmailSearchQuery(String sender, String accountNumber) {
+  static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    // Do not require unread: opening the bank alert must not prevent a later
-    // poll from reconciling it. Provider message IDs keep repeated reads idempotent.
-    return "from:" + sender + " \"" + digits + "\"";
+    // Match all Sacombank alert variants while requiring the configured
+    // receiving account. There is intentionally no unread/state predicate.
+    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn) \"" + digits + "\"";
   }
   private String rawMessage(String mailbox, String id, String token) { JsonNode body = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=raw", token); String raw = body.path("raw").asText(""); if (raw.isBlank()) throw new IllegalStateException("Gmail message payload was empty"); try { return new String(Base64.getUrlDecoder().decode(raw), StandardCharsets.UTF_8); } catch (IllegalArgumentException ex) { throw new IllegalStateException("Gmail message payload was invalid"); } }
   private JsonNode get(String url, String token) { try { HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail API request failed"); return mapper.readTree(response.body()); } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail API request failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail API request interrupted", ex); } }

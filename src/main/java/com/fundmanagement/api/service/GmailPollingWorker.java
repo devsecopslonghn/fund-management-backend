@@ -1,6 +1,5 @@
 package com.fundmanagement.api.service;
 
-import com.fundmanagement.api.config.GmailProperties;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -19,7 +18,8 @@ public class GmailPollingWorker {
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
   public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null); }
   @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; }
-  @Scheduled(fixedDelayString = "${FUND_GMAIL_POLL_INTERVAL_MS:180000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
+  /** Full mailbox reconciliation. The five-second schedule below is reserved for active QR windows. */
+  @Scheduled(fixedDelayString = "${app.gmail.batch-poll-interval-ms:1800000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
   public void poll() {
     if (detectionWindow != null && safeWindowActive()) return;
     runPoll();
@@ -37,7 +37,7 @@ public class GmailPollingWorker {
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }
     if (acquired.isEmpty()) return;
     try {
-      List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchUnreadSacombankMessages();
+      List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchSacombankMessages();
       log.info("Gmail poll fetched {} candidate bank alert(s)", messages.size());
       for (MailboxIngestionPort.MailboxMessage message : messages) {
         try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); }

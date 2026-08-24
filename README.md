@@ -176,7 +176,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
 | ID | Requirement | Note |
 |---|---|---|
-| FR-E-01 | System connects to a mailbox (Gmail API, OAuth2) and receives Sacombank balance-change notifications near-real-time (Gmail Push/Pub-Sub) or via periodic polling (fallback, e.g. every 2–5 minutes). | Prefer push to reduce latency and API calls |
+| FR-E-01 | System connects to a mailbox (Gmail API, OAuth2) and receives Sacombank balance-change notifications near-real-time (five-second polling during the five-minute QR detection window) plus a full, paginated mailbox reconciliation every 30 minutes. | The batch scans matching account content regardless of read/unread state; repeated provider IDs are idempotent |
 | FR-E-02 | A parser extracts: account number, transaction datetime, amount (+/-), transfer content, and available balance from the Sacombank HTML email body. | Needs a regression test suite covering multiple content variants (direct transfer, QR, MoMo/ZaloPay relay, etc.) |
 | FR-E-03 | For incoming (+) transactions, the reconciliation engine (see §6.3) scores candidate matches against member + due period. | |
 | FR-E-04 | If matched with high confidence (configurable threshold), the system auto-records the payment, updates the due period, and emails a confirmation to the member. | Fulfils the "fully automatic" choice made by the treasurer |
@@ -545,7 +545,7 @@ Operational checks that remain intentionally gated:
 
 - Reconstruct and approve historical per-member due/payment allocations. The imported raw ledger is retained, but no blind debt generation or financial rewrite is performed; the migration API is preview-only until a reviewed importer exists. Acceptance criterion #2 is therefore not yet met.
 - Let CI publish the images and ArgoCD roll the chart, then verify two ready backend Pods on eligible nodes and a successful backup Job/restore drill.
-- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger and manual-review flow exist, but live mailbox polling/push and email delivery remain disabled rather than using invented credentials.
+- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger, five-minute fast polling, and 30-minute full mailbox reconciliation/manual-review flow exist; email delivery remains disabled rather than using invented credentials.
 - Verify a generated VietQR with two banking apps and add browser-level E2E coverage against the deployed public payer and Admin workflows.
 
 ### 11.2 Phase 2 — Reconciliation Automation

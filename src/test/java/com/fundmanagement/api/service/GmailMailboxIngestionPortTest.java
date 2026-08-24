@@ -7,12 +7,13 @@ import org.junit.jupiter.api.Test;
 
 class GmailMailboxIngestionPortTest {
   @Test void searchAlwaysContainsTheConfiguredReceivingAccount() {
-    assertThat(GmailMailboxIngestionPort.gmailSearchQuery("alerts@example.test", "000 123-456"))
-        .isEqualTo("from:alerts@example.test \"000123456\"");
+    String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
+    assertThat(query).isEqualTo("(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn) \"000123456\"");
+    assertThat(query).doesNotContainIgnoringCase("unread");
   }
 
   @Test void searchFailsClosedWithoutAConfiguredReceivingAccount() {
-    assertThatThrownBy(() -> GmailMailboxIngestionPort.gmailSearchQuery("alerts@example.test", "---"))
+    assertThatThrownBy(() -> GmailMailboxIngestionPort.gmailSearchQuery("---"))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }
