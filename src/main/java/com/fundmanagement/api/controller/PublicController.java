@@ -19,9 +19,11 @@ public class PublicController {
   private final DashboardService dashboard; private final DuesService dues;
   public PublicController(DashboardService dashboard, DuesService dues) { this.dashboard = dashboard; this.dues = dues; }
   @GetMapping("/overview") public ApiDtos.PublicOverviewResponse overview() { return dashboard.publicOverview(); }
+  @GetMapping("/payment-dashboard") public ApiDtos.PublicPaymentDashboardResponse paymentDashboard() { return dashboard.publicPaymentDashboard(); }
   /** Name lookup returns only payable due periods. It never returns contact details or payment history. */
   @PostMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@Valid @RequestBody ApiDtos.PublicPaymentOptionsRequest request) { return dues.publicPaymentOptions(request); }
   @PostMapping("/payment-intents") @ResponseStatus(HttpStatus.CREATED)
   public ApiDtos.PublicPaymentIntentResponse createPaymentIntent(@Valid @RequestBody ApiDtos.PublicPaymentIntentRequest request) { return dues.createPublicIntent(request); }
   @GetMapping("/payment-intents/{id}") public ApiDtos.PublicPaymentIntentStatusResponse paymentIntentStatus(@PathVariable String id) { return dues.publicIntentStatus(id); }
+  @GetMapping("/payment-intents/{id}/details") public ApiDtos.PublicPaymentIntentDetailsResponse paymentIntentDetails(@PathVariable String id) { return dues.publicIntentDetails(id); }
 }

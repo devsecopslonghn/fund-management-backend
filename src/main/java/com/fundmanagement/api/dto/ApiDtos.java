@@ -36,6 +36,8 @@ public final class ApiDtos {
   public record PublicPaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   /** Polling response intentionally contains no member, amount, account, or transaction history. */
   public record PublicPaymentIntentStatusResponse(String id, IntentStatus status, Instant expiresAt) {}
+  /** Shareable payment details intentionally exclude payer identity and internal transaction data. */
+  public record PublicPaymentIntentDetailsResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   public record PaymentIntentResponse(String id, long amount, String transferContent, String qrImageUrl, String accountHolder, String accountNumber, String bankName, Instant expiresAt, IntentStatus status) {}
   public record GenerationResult(String month, int created, int skipped) {}
   public record ManualPaymentRequest(@NotBlank String memberId, @Min(1) long amount, @NotNull Instant occurredAt, @NotBlank @Size(min = 16, max = 128) String idempotencyKey, @Size(max = 500) String note) {}
@@ -46,6 +48,10 @@ public final class ApiDtos {
   public record PublicMemberStatus(String name, String status) {}
   public record MonthlySeriesResponse(String month, long income, long expense) {}
   public record PublicOverviewResponse(long balance, long incomeThisMonth, long expenseThisMonth, int currentMonthCompliancePercent, List<MonthlySeriesResponse> monthlySeries, List<PublicMemberStatus> members) {}
+  /** Public payment dashboard data. This endpoint intentionally exposes member dues per the approved product policy. */
+  public record PublicPaymentDashboardResponse(long balance, long incomeThisMonth, long expenseThisMonth, List<MonthlySeriesResponse> monthlySeries, List<PublicPaymentDashboardMember> members) {}
+  public record PublicPaymentDashboardMember(String id, String fullName, String memberCode, String joinMonth, String baselineMonth, long contributionAmount, String status, List<PublicPaymentDashboardDue> duePeriods) {}
+  public record PublicPaymentDashboardDue(String id, String month, long amountDue, long amountPaid, long outstandingAmount, DueStatus status) {}
   public record DashboardResponse(long balance, long totalIncome, long totalExpense, int currentMonthCompliancePercent, long reviewCount, List<MonthlySeriesResponse> monthlySeries, List<MemberResponse> latePayers) {}
   public record SettingsResponse(long defaultContributionAmount, double autoReconciliationThreshold, String bankName, String bankCode, String accountNumber, String accountHolder, boolean dueSchedulerEnabled, boolean startupCatchUpEnabled, boolean ingestionEnabled, boolean gmailEnabled, String gmailSenderFilter, boolean smtpEnabled, String smtpHost, int smtpPort, String smtpFrom) {}
   public record SettingsRequest(@Min(1) long defaultContributionAmount, @Min(0) @Max(1) double autoReconciliationThreshold, @NotBlank String bankName, @NotBlank String bankCode, @NotBlank String accountNumber, @NotBlank String accountHolder, boolean dueSchedulerEnabled, boolean startupCatchUpEnabled, boolean ingestionEnabled, boolean gmailEnabled, @Size(max = 254) String gmailSenderFilter, boolean smtpEnabled, @Size(max = 255) String smtpHost, @Min(1) int smtpPort, @Size(max = 254) String smtpFrom, @Size(max = 255) String smtpSecretRef) {}

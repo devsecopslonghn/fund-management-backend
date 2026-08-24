@@ -50,11 +50,12 @@ logic.
 - Enforce authorization on the server for every endpoint. Never trust a role,
   member ID, payment total, due-period ID, or visibility decision supplied by
   the client.
-- Public endpoints may return only aggregate data, member names, and high-level
-  status. The anonymous payer endpoints may additionally return only the
-  selected member's currently payable periods, server-calculated total, QR,
-  fund transfer-account details and standardized transfer content. They must never expose email, phone, full
-  history, tokens, raw transaction content, audit logs, or reconciliation data.
+- The approved public payment-dashboard endpoint may return member codes,
+  due periods, amount due, amount paid, outstanding amount and status for
+  active members. Public payment intent endpoints may return server-calculated
+  totals, QR, fund transfer-account details and opaque transfer content. They
+  must never expose email, phone, OAuth material, credentials, raw bank
+  messages, audit logs, or reconciliation internals.
 - Anonymous payer lookup is not authentication: match exact normalized names,
   require member-code disambiguation for duplicate names, rate-limit and audit
   lookup/intent creation, and return generic errors without leaking data.

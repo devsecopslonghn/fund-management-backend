@@ -116,6 +116,13 @@ public class DuesService {
     if (status == IntentStatus.PENDING && intent.expiresAt != null && intent.expiresAt.isBefore(Instant.now())) { intent.status = IntentStatus.EXPIRED; intents.save(intent); status = IntentStatus.EXPIRED; }
     return new ApiDtos.PublicPaymentIntentStatusResponse(intent.id, status, intent.expiresAt);
   }
+  /** Returns shareable payment details without exposing payer identity or internal transaction data. */
+  public ApiDtos.PublicPaymentIntentDetailsResponse publicIntentDetails(String id) {
+    publicIntentStatus(id);
+    PaymentIntentDocument intent = intents.findById(id).orElseThrow(() -> new IllegalArgumentException("Payment intent not found"));
+    ApiDtos.PublicPaymentIntentResponse response = toPublicResponse(intent);
+    return new ApiDtos.PublicPaymentIntentDetailsResponse(response.id(), response.amount(), response.transferContent(), response.qrImageUrl(), response.accountHolder(), response.accountNumber(), response.bankName(), response.expiresAt(), response.status());
+  }
   private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }
   private boolean hasOutstanding(DuePeriodDocument period) { return outstanding(period) > 0; }
   private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }

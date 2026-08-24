@@ -3,8 +3,9 @@ info:
   title: Fund Management API
   version: 1.1.0
   description: |
-    Phase 1 API for the single-group fund. Money values are integer VND; public
-    responses never disclose individual financial amounts.
+    Phase 1 API for the single-group fund. Money values are integer VND. The
+    approved public payment dashboard may expose member/month due details, but
+    never returns contact data, OAuth material, credentials, or raw bank messages.
 servers:
   - url: /api/v1
 tags:
@@ -20,6 +21,15 @@ paths:
         '200':
           description: Aggregate fund status and non-sensitive member badges
           content: { application/json: { schema: { $ref: '#/components/schemas/PublicOverview' } } }
+  /public/payment-dashboard:
+    get:
+      tags: [Public]
+      operationId: getPublicPaymentDashboard
+      description: Public payment dashboard with member/month details approved for the current product policy. Never returns contact data, OAuth material, credentials, or raw bank messages.
+      responses:
+        '200':
+          description: Detailed payment dashboard
+          content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentDashboard' } } }
   /public/payment-intents/{id}:
     get:
       tags: [Public]
@@ -28,6 +38,15 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         '200': { description: Payment intent status, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentIntentStatus' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /public/payment-intents/{id}/details:
+    get:
+      tags: [Public]
+      operationId: getPublicPaymentIntentDetails
+      description: Returns shareable payment details only; excludes payer identity and internal transaction data.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Shareable payment details, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentIntentDetails' } } } }
         '404': { $ref: '#/components/responses/NotFound' }
   /public/personal-link-requests:
     post:
@@ -288,12 +307,16 @@ components:
   schemas:
     PublicOverview: { type: object, required: [balance, members], properties: { balance: { type: integer, format: int64, description: Aggregate VND only }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, members: { type: array, items: { $ref: '#/components/schemas/PublicMemberStatus' } } } }
     PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [NO_DUE_PERIODS, UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
+    PublicPaymentDashboard: { type: object, properties: { balance: { type: integer, format: int64 }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, members: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardMember' } } } }
+    PublicPaymentDashboardMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, contributionAmount: { type: integer, format: int64 }, status: { type: string }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardDue' } } } }
+    PublicPaymentDashboardDue: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] } } }
     PersonalOverview: { type: object, properties: { member: { $ref: '#/components/schemas/PersonalMember' }, totalPaid: { type: integer, format: int64 }, totalOwed: { type: integer, format: int64 }, duePeriods: { type: array, items: { $ref: '#/components/schemas/DuePeriod' } } } }
     PersonalMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string } } }
     DuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, notes: { type: string, nullable: true } } }
     CreatePaymentIntentRequest: { type: object, required: [duePeriodIds], properties: { duePeriodIds: { type: array, minItems: 1, items: { type: string } } } }
     PaymentIntent: { type: object, properties: { id: { type: string }, amount: { type: integer, format: int64 }, transferContent: { type: string }, qrImageUrl: { type: string, format: uri }, accountHolder: { type: string }, accountNumber: { type: string }, bankName: { type: string }, expiresAt: { type: string, format: date-time }, status: { type: string, enum: [PENDING, FULFILLED, EXPIRED] } } }
     PublicPaymentIntentStatus: { type: object, properties: { id: { type: string }, status: { type: string, enum: [PENDING, FULFILLED, EXPIRED] }, expiresAt: { type: string, format: date-time } } }
+    PublicPaymentIntentDetails: { type: object, properties: { id: { type: string }, amount: { type: integer, format: int64 }, transferContent: { type: string }, qrImageUrl: { type: string, format: uri }, accountHolder: { type: string }, accountNumber: { type: string }, bankName: { type: string }, expiresAt: { type: string, format: date-time }, status: { type: string, enum: [PENDING, FULFILLED, EXPIRED] } } }
     MemberUpsertRequest: { type: object, required: [memberCode, fullName, email, joinMonth, contributionAmount], properties: { memberCode: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' }, fullName: { type: string }, email: { type: string, format: email }, phone: { type: string }, joinMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, baselineMonth: { type: string, nullable: true }, contributionAmount: { type: integer, format: int64, minimum: 1 }, status: { type: string, enum: [ACTIVE, PAUSED, LEFT] } } }
     Member: { type: object, properties: { id: { type: string }, memberCode: { type: string }, fullName: { type: string }, email: { type: string }, phone: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, status: { type: string }, contributionAmount: { type: integer, format: int64 } } }
     CreatedMember: { allOf: [{ $ref: '#/components/schemas/Member' }, { type: object, properties: { magicLink: { type: string, description: Returned only at create/regenerate; treat as secret. } } }] }

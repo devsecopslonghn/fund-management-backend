@@ -121,10 +121,10 @@ A client–server internal web app:
 |---|---|---|
 | Treasurer (Admin) | 1–2 people who run the fund | Authenticated access only. Manage members, record expenses, review/reconcile transactions, configure contribution rates, view all reports, system configuration |
 | Member / Payer | Group participant with a due obligation | View the public overview; without login, select their own exact name and generate a payment QR for outstanding dues |
-| Public / Guest | Anyone with the public link | View only aggregated, non-sensitive info (total balance, member names, high-level paid/unpaid status) |
+| Public / Guest | Anyone with the public link | View the public payment dashboard, including member/month dues and high-level fund metrics; never receive contact data, OAuth material, credentials, or raw bank messages |
 | Automated system (Email Worker) | Background process | Reads bank emails, parses, creates transaction records, runs auto-reconciliation or flags for manual review |
 
-> **Security note**: individual contribution amounts and payment history are sensitive. The public list shows only a high-level status badge (e.g., "Paid through Jul/2026" or a Green/Yellow/Red badge). The anonymous payment flow may show only the selected member's currently payable dues and QR; it must never reveal contact details, full payment history, or other members' information. Full details are available only to an authenticated Admin.
+> **Approved product policy**: the public payment dashboard intentionally shows member codes, due periods, amount due, amount paid, outstanding amount and status for all active members. It still never returns email, phone, OAuth material, credentials, raw bank messages, audit logs or reconciliation internals. Public access is not authentication and payment intent creation remains server-priced.
 
 ---
 
@@ -150,8 +150,8 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-B-01 | At the start of each month, the system auto-generates one "due period" per active member, using that member's current contribution rate. | Scheduled job |
 | FR-B-02 | Each due period has a status: Unpaid / Fully Paid / Partially Paid / Overpaid (overpayment optionally rolls forward, configurable). | |
 | FR-B-03 | When a transaction is reconciled to a member, the system applies it against outstanding due periods oldest-first (FIFO). | Handles lump-sum payments covering several months at once |
-| FR-B-04 | Authenticated Admin can view each member's total paid since joining, remaining balance owed, and a month-by-month breakdown. | Anonymous payers cannot view this history |
-| FR-B-05 | The public list shows a high-level status badge per member (Up to date / Some months missing), never the exact amount. | See §3 – security |
+| FR-B-04 | Authenticated Admin can view each member's total paid since joining, remaining balance owed, and a month-by-month breakdown. | |
+| FR-B-05 | The public payment dashboard shows each active member's month-by-month due details and status. | Contact data and bank internals remain private |
 | FR-B-06 | Admin can manually adjust a due period (e.g., waive a fee, add a note); every manual adjustment is logged with actor and timestamp. | Audit trail |
 
 ### 4.3 Module C — Expense Management
@@ -166,11 +166,11 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
 | ID | Requirement | Note |
 |---|---|---|
-| FR-D-01 | Without login, a payer enters/selects their exact full name, selects due period(s) to pay (default: all outstanding), and the system computes the total. | Require member code only when duplicate names exist |
+| FR-D-01 | Without login, a payer selects a member from the public payment dashboard, selects due period(s) to pay (default: all outstanding), and the server computes the total. | Member code is shown for unambiguous selection |
 | FR-D-02 | The system generates a **VietQR (Napas 247)** code containing: fund account number, amount, and exactly one opaque 10-character `A-Z0-9` transfer reference (see §6.3). | The reference must not encode member code or month |
 | FR-D-03 | The QR page also shows a "Copy content / account number" button for manual transfers. | |
 | FR-D-04 | Creating a QR marks the related due period(s) as "Awaiting payment" and records a **payment intent** for later matching. | |
-| FR-D-05 | The anonymous payment endpoint returns only the selected payable due periods, total, QR and opaque transfer reference; it must not return email, phone, full history, or data for another member. | Rate-limit and audit lookup/intent creation |
+| FR-D-05 | The payment dashboard endpoint returns member/month payment data under the approved public policy; payment intent creation returns only the selected periods, total, QR and opaque transfer reference. | Never return contact data, OAuth material, credentials or raw bank messages; rate-limit and audit intent creation |
 
 ### 4.5 Module E — Email Ingestion & Auto-Reconciliation
 
@@ -212,7 +212,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-H-01 | Admin logs in via username/password or Google OAuth, with optional 2FA (recommended, not mandatory for MVP). | |
 | FR-H-02 | At least two permission levels: Super Admin (full control, system config, mailbox connection) and Admin (day-to-day: expenses, transaction review). | Anticipates a second treasurer |
 | FR-H-03 | System configuration (monitored bank account, default contribution rate, auto-reconciliation threshold, reminder schedule) is managed via the Admin UI, not hard-coded. | |
-| FR-H-04 | All create, edit, deactivate, expense, reconciliation, report and configuration operations require authenticated Admin authorization. Anonymous access is limited to public overview and payer-name lookup/QR creation. | Enforce on API, not only in the UI |
+| FR-H-04 | All create, edit, deactivate, expense, reconciliation, report and configuration operations require authenticated Admin authorization. Anonymous access includes the public payment dashboard and QR creation, but no mutation other than creating a durable payment intent. | Enforce on API, not only in the UI |
 
 ---
 
@@ -394,8 +394,8 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 
 ### 7.1 Monthly Dues Payment
 
-1. Payer opens the public payment page and enters/selects their exact full name. If duplicate names exist, the system asks for the member code; no login is required.
-2. Payer selects due period(s) to pay → system creates a `payment_intent` (member, total amount, creation time) → generates a VietQR code + the opaque 10-character reference for the earliest selected month. Only the currently payable dues are shown.
+1. Payer opens the public payment dashboard and selects a member. No login is required.
+2. Payer selects due period(s) to pay → system creates a `payment_intent` (member, total amount, creation time) → generates a VietQR code + the opaque 10-character reference for the earliest selected month. Completed and outstanding periods are shown with their amounts and statuses.
 3. Payer scans the QR with any banking/wallet app → transfers.
 4. Sacombank sends a balance-change email → Email Worker receives, parses it.
 5. Reconciliation engine checks the exact opaque reference token, exact amount, receiving account, and short intent timing (§6.3) → auto-records only when the controlled signals agree.
@@ -476,20 +476,21 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 - **Mobile-first**: most payers will open the payment page on a phone.
 - **Clear and minimal**: present financial figures as simple tables and charts (bar/line); avoid decorative clutter.
-- **Layered by role**: Public → high-level only; Anonymous payer → selected payable dues and QR only; Admin → full control + sensitive figures.
+- **Public payment dashboard**: Member/month due details are intentionally visible under the approved product policy; credentials, contact data and bank internals remain private.
 - **Consistent status colors**: Green = fully paid, Yellow = one period missing, Red = two or more periods missing / long overdue.
 
 ### 9.2 Public Overview Dashboard
 
 - Top block: current fund balance (large, prominent), plus current-month total income/expense.
 - Bar chart of income vs. expense for the last 6–12 months.
-- Member list: name + status badge (no amounts shown) + a "Pay my dues" action that opens the anonymous payer-name selection flow.
+- Member list: name + member code + status and a link to the payment dashboard.
 
-### 9.3 Anonymous Payment Page
+### 9.3 Public Payment Dashboard
 
-- Exact-name selector/search; duplicate-name cases require member code.
-- Show only currently payable due periods, selected total and a prominent "Pay now" button; do not show paid history, email, phone or another member's information.
-- Display a concise privacy notice that name lookup is not an authenticated account session.
+- Responsive two-column layout: member search/selection and due-period checklist on the left, QR panel on the right.
+- Show month, amount due, amount paid, outstanding amount and status for the selected member; default to all outstanding periods.
+- Include server-calculated total, bank details, opaque transfer content, QR download/share, and 5-second status polling for five minutes.
+- Display a notice that public access is not authentication and that the dashboard never exposes contact data or raw bank messages.
 
 ### 9.4 Payment QR Page
 
@@ -516,7 +517,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 |---|---|---|
 | Transfer content overwritten by wallets/IBFT relays | Transactions fail to auto-match | Multi-signal reconciliation (§6.3); prioritize the `payment_intent` timing signal + amount over content alone |
 | Sacombank email format changes (layout, HTML structure) | Parser breaks, transactions missed | Snapshot tests for the parser; alert on a spike in parse failures; retain raw emails to allow re-parsing after a fix |
-| Anonymous payer lookup exposes financial information | Privacy impact for members | Public page shows only high-level status; anonymous flow limits output to selected payable dues/QR, exact-name matching, member-code disambiguation, rate limits and audit logs; full history remains Admin-only |
+| Public dashboard exposes financial information | Privacy impact for members | This is an explicit product decision; keep contact data, credentials, OAuth material, raw bank messages and reconciliation internals private, with rate limits and audit logs |
 | Loss of OAuth mailbox access (expired/revoked token) | Automatic detection stops working | Early alerting on refresh-token failures; a fast re-auth procedure; always keep manual entry as a fallback |
 | Incorrect auto-reconciliation (wrong member matched) | Due-balance errors, trust impact | High auto-match threshold (≥0.85); every auto-recorded match remains visible in history labeled "automatic" so Admin can audit/undo |
 | Payment-reference migration or code collision | QR content changes or references become ambiguous | New `(member_id, month)` and global `code` unique indexes; collision retry; historical intents remain untouched. Rollback is code-only: disable new QR creation, preserve `payment_references`, and restore the previous application image; do not delete or rewrite financial records. |
@@ -533,12 +534,12 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 - Module C (expenses) fully implemented.
 - Module D: static VietQR generation (no auto-matching yet).
 - Module F basics: overview dashboard, income/expense charts.
-- Public page + anonymous payer-name payment page (no member login), with authenticated Admin member management.
+- Public payment dashboard + QR flow (no member login), with authenticated Admin member management.
 - Basic Docker/K8s deployment with DB backups.
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; anonymous payer-name lookup with duplicate-name disambiguation; server-priced VietQR payment intents with stable opaque 10-character member-month references; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and exact intent auto-match; manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate; public payment dashboard with member/month dues; server-priced VietQR payment intents with stable opaque 10-character member-month references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO manual payment; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly scheduler and bounded startup catch-up (both opt-in); read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and exact intent auto-match; manual bank-message review/reconciliation boundary; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
 Operational checks that remain intentionally gated:
 
@@ -569,6 +570,6 @@ Operational checks that remain intentionally gated:
 4. Generated VietQR codes are valid and scannable by at least two different major banking apps in testing.
 4a. Every newly generated payment intent uses exactly one immutable 10-character `A-Z0-9` reference; references are stable for member/month, globally unique, and historical intents remain readable without rewrite.
 5. *(Phase 2)* Against a test set of ≥20 real sample emails (including MoMo/IBFT relay cases), the auto-reconciliation engine achieves ≥80% correct auto-match rate at the high-confidence threshold; all remaining cases appear fully in the manual-review queue with no transaction silently dropped.
-6. An unauthenticated payer can select their own exact name and create a valid QR payment intent, while the public page and payer API never expose contact details or full individual payment history.
+6. An unauthenticated visitor can select any active member from the public payment dashboard, inspect member/month due details, and create a valid QR payment intent; public responses never expose contact details, credentials, OAuth material, raw bank messages or reconciliation internals.
 7. Only an authenticated Admin can create, edit or deactivate members, and every such change is audit-logged.
 8. The system deploys successfully via the CI/CD pipeline to the Kubernetes/VPS environment, with working DB backups and a restore runbook tested at least once.
