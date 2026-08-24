@@ -80,6 +80,25 @@ class DuesServiceTest {
     assertThat(result.duePeriods().getFirst().outstandingAmount()).isEqualTo(80_000);
   }
 
+  @Test void indexedYearLookupMaterializesConfiguredAnnualPlanBeforeReturningOptions() {
+    MemberDocument member = member("m-annual", "2026-01"); member.fullName = "Hoa Trắc Điểm"; member.memberCode = "DIEMHT15476"; member.contributionStartMonth = "2026-01"; member.annualContributionMonths = 12;
+    when(members.findByStatusAndMemberCode(MemberStatus.ACTIVE, "DIEMHT15476")).thenReturn(List.of(member));
+    when(dues.findByMemberIdAndMonthBetweenOrderByMonthAsc("m-annual", "2026-01", "2026-12")).thenReturn(List.of());
+    when(memberService.rateFor(any(MemberDocument.class), anyString())).thenReturn(100_000L);
+    when(dues.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(dues.findPublicByMemberIdOrderByMonthAsc("m-annual")).thenAnswer(invocation -> {
+      List<DuePeriodDocument> generated = new java.util.ArrayList<>();
+      for (int month = 1; month <= 12; month++) generated.add(due("due-" + month, String.format("2026-%02d", month), 100_000, 0));
+      return generated;
+    });
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+
+    ApiDtos.PublicPaymentOptionsResponse result = service.publicPaymentOptionsByMember("Hoa Trắc Điểm", "DIEMHT15476", 2026);
+
+    assertThat(result.duePeriods()).hasSize(12);
+    verify(dues).saveAll(org.mockito.ArgumentMatchers.argThat(value -> ((java.util.Collection<?>) value).size() == 12));
+  }
+
   @Test void anonymousIntentUsesServerCalculatedAmountAndRejectsPaidPeriods() {
     MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
     DuePeriodDocument unpaid = due("due-1", "2026-08", 100_000, 20_000);

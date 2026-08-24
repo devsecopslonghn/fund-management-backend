@@ -10,6 +10,8 @@ import org.springframework.data.domain.Pageable;
 public interface DuePeriodRepository extends MongoRepository<DuePeriodDocument, String> {
   Optional<DuePeriodDocument> findByMemberIdAndMonth(String memberId, String month);
   List<DuePeriodDocument> findByMemberIdOrderByMonthAsc(String memberId);
+  @Query(value = "{ 'memberId': ?0, 'month': { $gte: ?1, $lte: ?2 } }", fields = "{ '_id': 1, 'memberId': 1, 'month': 1, 'amountDue': 1, 'amountPaid': 1, 'status': 1 }")
+  List<DuePeriodDocument> findByMemberIdAndMonthBetweenOrderByMonthAsc(String memberId, String from, String to);
   List<DuePeriodDocument> findByMemberIdInOrderByMonthAsc(Collection<String> memberIds);
   @Query(value = "{ 'memberId': { $in: ?0 }, 'month': { $gte: ?1, $lte: ?2 } }", fields = "{ '_id': 1, 'memberId': 1, 'month': 1, 'amountDue': 1, 'amountPaid': 1, 'status': 1 }")
   List<DuePeriodDocument> findBoardByMemberIdInAndMonthBetweenOrderByMonthAsc(Collection<String> memberIds, String from, String to);

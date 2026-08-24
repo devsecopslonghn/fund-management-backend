@@ -122,6 +122,7 @@ public class DuesService {
     if (isBlank(memberCode) && matches.size() > 1) return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
     MemberDocument member = resolvePublicMember(matches, memberCode);
     if (year != null && (year < 2000 || year > 9999)) throw new IllegalArgumentException("Year is invalid");
+    if (year != null) ensureYearPlan(member, year);
     List<ApiDtos.PublicDuePeriodResponse> payable = dues.findPublicByMemberIdOrderByMonthAsc(member.id).stream()
         .filter(p -> year == null || (p.month != null && p.month.startsWith(year + "-")))
         .filter(this::hasOutstanding)
@@ -185,6 +186,32 @@ public class DuesService {
     return annual == null || annual.isBlank() ? paymentReferences.referenceFor(memberId, legacyMonth) : annual;
   }
   private boolean initiallyPaid(MemberDocument member, String month) { return member.initiallyPaidMonths != null && member.initiallyPaidMonths.contains(month); }
+  /**
+   * Materializes the member's configured annual master plan before returning
+   * payment options. The board may project missing periods for display, but a
+   * QR intent needs durable due IDs. This idempotent, bounded write closes the
+   * gap between those two read models without requiring Admin review.
+   */
+  private void ensureYearPlan(MemberDocument member, int year) {
+    String startValue = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+    if (startValue == null || startValue.isBlank()) return;
+    YearMonth planStart;
+    try { planStart = YearMonth.parse(startValue); } catch (RuntimeException ex) { return; }
+    int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
+    YearMonth planEnd = planStart.plusMonths(count - 1L);
+    YearMonth first = YearMonth.of(year, 1), last = YearMonth.of(year, 12);
+    if (planEnd.isBefore(first) || planStart.isAfter(last)) return;
+    List<DuePeriodDocument> existing = dues.findByMemberIdAndMonthBetweenOrderByMonthAsc(member.id, first.toString(), last.toString());
+    Set<String> existingMonths = existing.stream().map(d -> d.month).collect(java.util.stream.Collectors.toSet());
+    List<DuePeriodDocument> missing = new java.util.ArrayList<>();
+    for (YearMonth month = first; !month.isAfter(last); month = month.plusMonths(1)) {
+      if (month.isBefore(planStart) || month.isAfter(planEnd) || existingMonths.contains(month.toString())) continue;
+      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month.toString(); due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.status = status(due); missing.add(due);
+    }
+    if (!missing.isEmpty()) {
+      try { dues.saveAll(missing); } catch (DuplicateKeyException ignored) { /* another request materialized the same plan */ }
+    }
+  }
   private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }
   private boolean hasOutstanding(DuePeriodDocument period) { return outstanding(period) > 0; }
   private List<MemberDocument> matchingPublicMembers(String fullName) { String normalized = memberService.normalizeName(fullName); return members.findByStatus(MemberStatus.ACTIVE).stream().filter(m -> normalized.equals(memberService.normalizeName(m.fullName))).toList(); }
