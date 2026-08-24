@@ -251,6 +251,9 @@ public class DuesService {
     if (requested.size() != requestedIds.size()) throw new IllegalArgumentException("Due periods must not be duplicated");
     List<DuePeriodDocument> periods = dues.findByMemberIdAndIdIn(member.id, requested);
     if (periods.size() != requested.size()) throw new IllegalArgumentException("One or more due periods are invalid");
+    if (periods.stream().anyMatch(period -> !inMemberPlan(member, period.month))) {
+      throw new IllegalArgumentException("Selected due periods are before the member baseline");
+    }
     Set<String> planYears = periods.stream().map(p -> p.month == null || p.month.length() < 4 ? "" : p.month.substring(0, 4)).collect(java.util.stream.Collectors.toSet());
     if (planYears.size() != 1 || planYears.contains("")) throw new IllegalArgumentException("A payment plan must stay within one calendar year");
     long amount = 0;
