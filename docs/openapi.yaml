@@ -25,7 +25,7 @@ paths:
     get:
       tags: [Public]
       operationId: getPublicPaymentDashboard
-      parameters: [{ name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 9999 }, description: Calendar year for the 12-column contribution board. }]
+      parameters: [{ name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 9999 }, description: Calendar year for the 14-period contribution board (01..12 plus mandatory bonus periods 13 and 14). }]
       description: Public payment dashboard with member/month details approved for the current product policy. Never returns contact data, OAuth material, credentials, or raw bank messages.
       responses:
         '200':
@@ -140,6 +140,21 @@ paths:
       operationId: regenerateMagicLink
       parameters: [{ name: memberId, in: path, required: true, schema: { type: string } }]
       responses: { '200': { description: New one-time link value, content: { application/json: { schema: { $ref: '#/components/schemas/MagicLink' } } } } }
+  /admin/payment-plans:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: listPaymentPlans
+      parameters: [{ name: year, in: query, required: true, schema: { type: integer, minimum: 2000, maximum: 9999 } }]
+      responses: { '200': { description: Annual master plan grid, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentPlanPage' } } } } }
+  /admin/members/{memberId}/payment-plan:
+    put:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: savePaymentPlan
+      parameters: [{ name: memberId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentPlanRequest' } } } }
+      responses: { '200': { description: Audited idempotent master plan, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentPlan' } } } }, '409': { $ref: '#/components/responses/Conflict' } }
   /admin/dues/generate:
     post:
       tags: [Admin]
@@ -338,7 +353,7 @@ components:
     PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [NO_DUE_PERIODS, UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
     PublicPaymentDashboard: { type: object, properties: { balance: { type: integer, format: int64 }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, year: { type: integer, nullable: true }, months: { type: array, items: { type: string } }, members: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardMember' } } } }
     PublicPaymentDashboardMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, contributionAmount: { type: integer, format: int64 }, status: { type: string }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardDue' } } } }
-    PublicPaymentDashboardDue: { type: object, properties: { id: { type: string, nullable: true }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, nullable: true, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, displayStatus: { type: string, enum: [NOT_OPENED, UNPAID, PARTIAL, PAID, OVERPAID] } } }
+    PublicPaymentDashboardDue: { type: object, properties: { id: { type: string, nullable: true }, month: { type: string, description: YYYY-01..YYYY-14; 13 and 14 are bonus periods }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, nullable: true, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, displayStatus: { type: string, enum: [NOT_OPENED, UNPAID, PARTIAL, PAID, OVERPAID] } } }
     PublicPaymentOptions: { type: object, properties: { requiresMemberCode: { type: boolean }, matches: { type: array, items: { $ref: '#/components/schemas/PublicMemberMatch' } }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicDuePeriod' } } } }
     PublicMemberMatch: { type: object, properties: { fullName: { type: string }, memberCode: { type: string, nullable: true } } }
     PublicDuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, outstandingAmount: { type: integer, format: int64 } } }
@@ -349,7 +364,11 @@ components:
     PaymentIntent: { type: object, properties: { id: { type: string }, amount: { type: integer, format: int64 }, transferContent: { type: string }, qrImageUrl: { type: string, format: uri }, accountHolder: { type: string }, accountNumber: { type: string }, bankName: { type: string }, expiresAt: { type: string, format: date-time }, status: { type: string, enum: [PENDING, PARTIAL, FULFILLED, CREDIT, EXPIRED] } } }
     PublicPaymentIntentStatus: { type: object, properties: { id: { type: string }, status: { type: string, enum: [PENDING, PARTIAL, FULFILLED, CREDIT, EXPIRED] }, expiresAt: { type: string, format: date-time } } }
     PublicPaymentIntentDetails: { type: object, properties: { id: { type: string }, amount: { type: integer, format: int64 }, transferContent: { type: string }, qrImageUrl: { type: string, format: uri }, accountHolder: { type: string }, accountNumber: { type: string }, bankName: { type: string }, expiresAt: { type: string, format: date-time }, status: { type: string, enum: [PENDING, FULFILLED, EXPIRED] } } }
-    MemberUpsertRequest: { type: object, required: [memberCode, fullName, email, joinMonth, contributionAmount], properties: { memberCode: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' }, fullName: { type: string }, email: { type: string, format: email }, phone: { type: string }, joinMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, baselineMonth: { type: string, nullable: true }, contributionAmount: { type: integer, format: int64, minimum: 1 }, status: { type: string, enum: [ACTIVE, PAUSED, LEFT] }, contributionStartMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, annualContributionMonths: { type: integer, minimum: 1, maximum: 12 }, initiallyPaidMonths: { type: array, items: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } } } }
+    MemberUpsertRequest: { type: object, required: [memberCode, fullName, email, joinMonth, contributionAmount], properties: { memberCode: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' }, fullName: { type: string }, email: { type: string, format: email }, phone: { type: string }, joinMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, baselineMonth: { type: string, nullable: true }, contributionAmount: { type: integer, format: int64, minimum: 1 }, status: { type: string, enum: [ACTIVE, PAUSED, LEFT] }, contributionStartMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, annualContributionMonths: { type: integer, minimum: 1, maximum: 14 }, initiallyPaidMonths: { type: array, items: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-4])$' } } } }
+    PaymentPlanRequest: { type: object, required: [year, contributionStartMonth, annualContributionMonths], properties: { year: { type: integer, minimum: 2000, maximum: 9999 }, contributionStartMonth: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }, annualContributionMonths: { type: integer, minimum: 1, maximum: 14 }, paidPeriods: { type: array, items: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-4])$' } }, expectedVersion: { type: integer, format: int64, nullable: true } } }
+    PaymentPlan: { type: object, properties: { memberId: { type: string }, memberCode: { type: string }, fullName: { type: string }, year: { type: integer }, contributionStartMonth: { type: string }, annualContributionMonths: { type: integer, maximum: 14 }, paidPeriods: { type: array, items: { type: string } }, periods: { type: array, items: { $ref: '#/components/schemas/MasterPlanPeriod' } }, version: { type: integer, format: int64, nullable: true } } }
+    MasterPlanPeriod: { type: object, properties: { id: { type: string, nullable: true }, period: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, nullable: true }, seededPaid: { type: boolean } } }
+    PaymentPlanPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/PaymentPlan' } }, year: { type: integer } } }
     Member: { type: object, properties: { id: { type: string }, memberCode: { type: string }, fullName: { type: string }, email: { type: string }, phone: { type: string }, joinMonth: { type: string }, baselineMonth: { type: string }, status: { type: string }, contributionAmount: { type: integer, format: int64 }, contributionStartMonth: { type: string }, annualContributionMonths: { type: integer }, initiallyPaidMonths: { type: array, items: { type: string } } } }
     CreatedMember: { allOf: [{ $ref: '#/components/schemas/Member' }, { type: object, properties: { magicLink: { type: string, description: Returned only at create/regenerate; treat as secret. } } }] }
     MemberPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/Member' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }

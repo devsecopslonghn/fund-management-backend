@@ -2,6 +2,7 @@ package com.fundmanagement.api.service;
 
 import com.fundmanagement.api.domain.DuePeriodDocument;
 import com.fundmanagement.api.domain.DueStatus;
+import com.fundmanagement.api.domain.ContributionPeriod;
 import com.fundmanagement.api.domain.ExpenseDocument;
 import com.fundmanagement.api.domain.ManualPaymentDocument;
 import com.fundmanagement.api.domain.MemberDocument;
@@ -62,16 +63,16 @@ public class DashboardService {
   public ApiDtos.PublicPaymentDashboardResponse publicPaymentDashboard(int year) {
     if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid");
     List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE); Map<String, List<DuePeriodDocument>> dueByMember = dueByMember(active); ApiDtos.PublicOverviewResponse overview = overview(active, dueByMember);
-    List<String> months = java.util.stream.IntStream.rangeClosed(1, 12).mapToObj(m -> YearMonth.of(year, m).toString()).toList();
+    List<String> months = ContributionPeriod.yearPeriods(year);
     List<ApiDtos.PublicPaymentDashboardMember> result = active.stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
       var existing = dueByMember.getOrDefault(member.id, List.of()).stream().collect(Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
-      YearMonth from = YearMonth.parse(start), to = from.plusMonths(count - 1L);
+      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+      YearMonth from = YearMonth.parse(start);
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
-        DuePeriodDocument due = existing.get(month); YearMonth ym = YearMonth.parse(month);
+        DuePeriodDocument due = existing.get(month);
         if (due != null) return new ApiDtos.PublicPaymentDashboardDue(due.id, month, due.amountDue, due.amountPaid, Math.max(0, due.amountDue - due.amountPaid), due.status);
-        if (ym.isBefore(from) || ym.isAfter(to)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
+        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
       }).toList();
       return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, member.contributionRates.stream().max(Comparator.comparing(rate -> rate.effectiveFrom)).map(rate -> rate.amount).orElse(0L), publicStatus(dueByMember.getOrDefault(member.id, List.of())), board);
@@ -86,7 +87,7 @@ public class DashboardService {
   public ApiDtos.PublicContributionBoardResponse publicContributionBoard(int year) {
     if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid");
     List<MemberDocument> active = members.findByStatus(MemberStatus.ACTIVE);
-    List<String> months = java.util.stream.IntStream.rangeClosed(1, 12).mapToObj(m -> YearMonth.of(year, m).toString()).toList();
+    List<String> months = ContributionPeriod.yearPeriods(year);
     if (active.isEmpty()) { MonthlyTotals current = monthly(YearMonth.now()); return new ApiDtos.PublicContributionBoardResponse(ledgerBalance(), current.income, current.expense, series(YearMonth.now()), List.of(), year, months); }
     List<String> ids = active.stream().map(m -> m.id).toList();
     List<DuePeriodDocument> due = dues.findBoardByMemberIdInAndMonthBetweenOrderByMonthAsc(ids, months.getFirst(), months.getLast());
@@ -94,12 +95,11 @@ public class DashboardService {
     List<ApiDtos.PublicPaymentDashboardMember> result = active.stream().sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName)).map(member -> {
       Map<String, DuePeriodDocument> existing = byMember.getOrDefault(member.id, List.of()).stream().collect(Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
-      YearMonth from = YearMonth.parse(start), to = from.plusMonths(count - 1L);
+      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
       List<ApiDtos.PublicPaymentDashboardDue> board = months.stream().map(month -> {
-        DuePeriodDocument d = existing.get(month); YearMonth ym = YearMonth.parse(month);
+        DuePeriodDocument d = existing.get(month);
         if (d != null) return new ApiDtos.PublicPaymentDashboardDue(d.id, month, d.amountDue, d.amountPaid, Math.max(0, d.amountDue - d.amountPaid), d.status);
-        if (ym.isBefore(from) || ym.isAfter(to)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
+        if (!ContributionPeriod.inPlan(month, start, count)) return new ApiDtos.PublicPaymentDashboardDue(null, month, 0, 0, 0, null, "NOT_OPENED");
         long amount = memberService.rateFor(member, month); return new ApiDtos.PublicPaymentDashboardDue(null, month, amount, 0, amount, DueStatus.UNPAID, "UNPAID");
       }).toList();
       return new ApiDtos.PublicPaymentDashboardMember(member.id, member.fullName, member.memberCode, member.joinMonth, member.baselineMonth, latestRate(member), publicStatus(byMember.getOrDefault(member.id, List.of())), board);

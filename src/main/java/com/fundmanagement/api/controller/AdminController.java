@@ -42,6 +42,9 @@ public class AdminController {
   @PostMapping("/dues/generate") public ApiDtos.GenerationResult generateDues(@RequestParam String month) { return dues.generate(month); }
   /** One-time/onboarding generation from each member's master contribution plan. */
   @PostMapping("/dues/generate-year") public ApiDtos.YearGenerationResult generateDuesYear(@RequestParam int year) { return dues.generateYear(year); }
+  /** Master payment-plan grid: one explicit annual plan per active member. */
+  @GetMapping("/payment-plans") public ApiDtos.PaymentPlanPageResponse listPaymentPlans(@RequestParam int year) { return dues.listPaymentPlans(year); }
+  @PutMapping("/members/{id}/payment-plan") public ApiDtos.PaymentPlanResponse savePaymentPlan(@PathVariable String id, @Valid @RequestBody ApiDtos.PaymentPlanRequest request, Principal principal) { return dues.savePaymentPlan(id, request, principal.getName()); }
   @GetMapping("/dues") public ApiDtos.DuePeriodPageResponse listDues(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size, @RequestParam(required = false) String month, @RequestParam(required = false) String memberId) { return dues.list(page, size, month, memberId); }
   @GetMapping("/dues/{id}") public ApiDtos.AdminDuePeriodResponse dueDetail(@PathVariable String id) { return dues.detail(id); }
   @PostMapping("/dues/{id}/adjustment") public ApiDtos.AdminDuePeriodResponse adjustDue(@PathVariable String id, @Valid @RequestBody ApiDtos.DueAdjustmentRequest request, Principal principal) { return dues.adjust(id, request, principal.getName()); }

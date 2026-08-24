@@ -18,5 +18,7 @@ public class DuePeriodDocument {
   public DueStatus status;
   public List<PaymentAllocation> payments = new ArrayList<>();
   public String notes;
+  /** True only for a master-plan import seed; it is not a bank/manual ledger allocation. */
+  public boolean seededPaid;
   @Version public Long version;
 }

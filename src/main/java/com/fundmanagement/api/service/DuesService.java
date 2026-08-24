@@ -3,6 +3,7 @@ package com.fundmanagement.api.service;
 import com.fundmanagement.api.config.FundProperties;
 import com.fundmanagement.api.domain.DuePeriodDocument;
 import com.fundmanagement.api.domain.DueStatus;
+import com.fundmanagement.api.domain.ContributionPeriod;
 import com.fundmanagement.api.domain.IntentStatus;
 import com.fundmanagement.api.domain.MemberDocument;
 import com.fundmanagement.api.domain.MemberStatus;
@@ -60,17 +61,96 @@ public class DuesService {
     int created = 0, skipped = 0, initiallyPaid = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
       String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
-      YearMonth first = YearMonth.of(year, 1); YearMonth last = first.plusMonths(11); YearMonth planStart = YearMonth.parse(start); YearMonth planEnd = planStart.plusMonths(count - 1L);
-      for (YearMonth month = first; !month.isAfter(last); month = month.plusMonths(1)) {
-        if (month.isBefore(planStart) || month.isAfter(planEnd)) { skipped++; continue; }
-        if (dues.findByMemberIdAndMonth(member.id, month.toString()).isPresent()) { skipped++; continue; }
-        DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month.toString(); due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.status = status(due);
+      int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+      ContributionPeriod.validateRegularMonth(start);
+      for (String period : ContributionPeriod.yearPeriods(year)) {
+        if (!ContributionPeriod.inPlan(period, start, count)) { skipped++; continue; }
+        if (dues.findByMemberIdAndMonth(member.id, period).isPresent()) { skipped++; continue; }
+        DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = period; due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.seededPaid = due.amountPaid > 0; due.status = status(due);
         try { dues.save(due); created++; if (due.amountPaid > 0) initiallyPaid++; } catch (DuplicateKeyException duplicate) { skipped++; }
       }
     }
     return new ApiDtos.YearGenerationResult(year, created, skipped, initiallyPaid);
   }
+
+  /** Returns the explicit per-member master plan used by the admin grid. */
+  public ApiDtos.PaymentPlanPageResponse listPaymentPlans(int year) {
+    validateYear(year);
+    List<ApiDtos.PaymentPlanResponse> plans = members.findByStatus(MemberStatus.ACTIVE).stream()
+        .sorted(Comparator.comparing(m -> m.fullName == null ? "" : m.fullName))
+        .map(member -> paymentPlanResponse(member, year)).toList();
+    return new ApiDtos.PaymentPlanPageResponse(plans, year);
+  }
+
+  /**
+   * Saves the admin master plan idempotently and materializes the requested
+   * year's due periods. Paid seeds are provenance markers only: no manual
+   * payment, income, or bank allocation is created.
+   */
+  public ApiDtos.PaymentPlanResponse savePaymentPlan(String memberId, ApiDtos.PaymentPlanRequest request, String actor) {
+    validateYear(request.year());
+    MemberDocument member = members.findById(memberId).orElseThrow(() -> new IllegalArgumentException("Member not found"));
+    if (request.expectedVersion() != null && member.version != null && !request.expectedVersion().equals(member.version)) {
+      throw new org.springframework.dao.OptimisticLockingFailureException("Member payment plan was changed by another user");
+    }
+    String start = request.contributionStartMonth();
+    ContributionPeriod.validateRegularMonth(start);
+    if (Integer.parseInt(start.substring(0, 4)) > request.year()) throw new IllegalArgumentException("Contribution start month cannot be after plan year");
+    int count = request.annualContributionMonths() == null ? 14 : request.annualContributionMonths();
+    if (count < 1 || count > 14) throw new IllegalArgumentException("annualContributionMonths must be between 1 and 14");
+    List<String> paid = request.paidPeriods() == null ? List.of() : request.paidPeriods().stream().distinct().sorted(ContributionPeriod.comparator()).toList();
+    for (String period : paid) { ContributionPeriod.validate(period); if (ContributionPeriod.year(period) != request.year()) throw new IllegalArgumentException("paidPeriods must belong to the requested year"); if (!ContributionPeriod.inPlan(period, start, count)) throw new IllegalArgumentException("paidPeriods contains a period outside the configured plan"); }
+    Map<String, Object> before = Map.of("contributionStartMonth", planStart(member), "annualContributionMonths", planMonths(member), "initiallyPaidMonths", member.initiallyPaidMonths == null ? List.of() : List.copyOf(member.initiallyPaidMonths));
+    List<DuePeriodDocument> existing = dues.findPlanByMemberIdAndMonthBetween(member.id, ContributionPeriod.key(request.year(), 1), ContributionPeriod.key(request.year(), 14));
+    Map<String, DuePeriodDocument> byPeriod = existing.stream().collect(java.util.stream.Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
+    for (String period : ContributionPeriod.yearPeriods(request.year())) {
+      if (!ContributionPeriod.inPlan(period, start, count)) continue;
+      DuePeriodDocument due = byPeriod.get(period);
+      boolean shouldSeed = paid.contains(period);
+      if (due == null) {
+        due = new DuePeriodDocument(); due.memberId = member.id; due.month = period; due.amountDue = memberService.rateFor(member, period); due.amountPaid = shouldSeed ? due.amountDue : 0; due.seededPaid = shouldSeed; due.status = status(due); dues.save(due); byPeriod.put(period, due);
+      } else {
+        if (due.amountDue <= 0) due.amountDue = memberService.rateFor(member, period);
+        if (shouldSeed && due.amountPaid > 0 && due.amountPaid < due.amountDue && !due.seededPaid) throw new IllegalArgumentException("Cannot seed a partially paid period");
+        if (shouldSeed && due.amountPaid == 0) { due.amountPaid = due.amountDue; due.seededPaid = true; }
+        if (!shouldSeed && due.seededPaid && due.payments != null && due.payments.isEmpty()) { due.amountPaid = 0; due.seededPaid = false; }
+        if (!shouldSeed && due.amountPaid > 0 && !due.seededPaid) throw new IllegalArgumentException("Cannot downgrade a ledger-paid period");
+        due.status = status(due); dues.save(due);
+      }
+    }
+    // Existing periods outside the new plan cannot be silently deleted or
+    // downgraded. They remain historical records and are not part of the plan.
+    member.contributionStartMonth = start;
+    member.annualContributionMonths = count;
+    List<String> retained = member.initiallyPaidMonths == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(member.initiallyPaidMonths);
+    retained.removeIf(value -> ContributionPeriod.isValid(value) && ContributionPeriod.year(value) == request.year());
+    retained.addAll(paid);
+    retained = retained.stream().distinct().sorted(ContributionPeriod.comparator()).toList();
+    member.initiallyPaidMonths = new java.util.ArrayList<>(retained);
+    members.save(member);
+    Map<String, Object> after = Map.of("contributionStartMonth", start, "annualContributionMonths", count, "initiallyPaidMonths", List.copyOf(retained));
+    if (audit != null) audit.record(actor == null ? "unknown" : actor, "PAYMENT_PLAN_SAVED", "member", member.id, before, after);
+    return paymentPlanResponse(member, request.year());
+  }
+
+  private ApiDtos.PaymentPlanResponse paymentPlanResponse(MemberDocument member, int year) {
+    String start = planStart(member);
+    int count = planMonths(member);
+    List<DuePeriodDocument> existing = dues.findPlanByMemberIdAndMonthBetween(member.id, ContributionPeriod.key(year, 1), ContributionPeriod.key(year, 14));
+    Map<String, DuePeriodDocument> byPeriod = existing.stream().collect(java.util.stream.Collectors.toMap(d -> d.month, d -> d, (a, b) -> a));
+    List<String> paid = member.initiallyPaidMonths == null ? List.of() : member.initiallyPaidMonths.stream().filter(ContributionPeriod::isValid).filter(value -> ContributionPeriod.year(value) == year).sorted(ContributionPeriod.comparator()).toList();
+    List<ApiDtos.MasterPlanPeriod> periods = ContributionPeriod.yearPeriods(year).stream().filter(period -> safeInPlan(period, start, count)).map(period -> {
+      DuePeriodDocument due = byPeriod.get(period);
+      if (due == null) return new ApiDtos.MasterPlanPeriod(null, period, 0, 0, 0, null, paid.contains(period));
+      return new ApiDtos.MasterPlanPeriod(due.id, period, due.amountDue, due.amountPaid, Math.max(0, due.amountDue - due.amountPaid), due.status, due.seededPaid);
+    }).toList();
+    return new ApiDtos.PaymentPlanResponse(member.id, member.memberCode, member.fullName, year, start, count, paid, periods, member.version);
+  }
+
+  private boolean safeInPlan(String period, String start, int count) { return start != null && !start.isBlank() && ContributionPeriod.isRegularMonth(start) && ContributionPeriod.inPlan(period, start, count); }
+  private String planStart(MemberDocument member) { return member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth; }
+  private int planMonths(MemberDocument member) { return member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14); }
+  private void validateYear(int year) { if (year < 2000 || year > 9999) throw new IllegalArgumentException("Year is invalid"); }
 
   public ApiDtos.DuePeriodPageResponse list(int page, int size, String month, String memberId) {
     if (page < 0 || size < 1) throw new IllegalArgumentException("Invalid page or size");
@@ -176,7 +256,7 @@ public class DuesService {
     List<DuePeriodDocument> outstanding = dues.findByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).sorted(Comparator.comparing(p -> p.month)).toList();
     if ("ALL_OUTSTANDING".equals(mode)) return outstanding.stream().map(p -> p.id).toList();
     if ("MONTH_COUNT".equals(mode)) { if (request.monthCount() == null) throw new IllegalArgumentException("monthCount is required"); return outstanding.stream().limit(request.monthCount()).map(p -> p.id).toList(); }
-    if ("THROUGH_MONTH".equals(mode)) { if (request.throughMonth() == null) throw new IllegalArgumentException("throughMonth is required"); parseMonth(request.throughMonth()); return outstanding.stream().filter(p -> p.month.compareTo(request.throughMonth()) <= 0).map(p -> p.id).toList(); }
+    if ("THROUGH_MONTH".equals(mode)) { if (request.throughMonth() == null) throw new IllegalArgumentException("throughMonth is required"); ContributionPeriod.validate(request.throughMonth()); return outstanding.stream().filter(p -> ContributionPeriod.comparator().compare(p.month, request.throughMonth()) <= 0).map(p -> p.id).toList(); }
     throw new IllegalArgumentException("Unsupported payment selection mode");
   }
   private String annualReference(String memberId, int year, String legacyMonth) {
@@ -195,18 +275,17 @@ public class DuesService {
   private void ensureYearPlan(MemberDocument member, int year) {
     String startValue = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
     if (startValue == null || startValue.isBlank()) return;
-    YearMonth planStart;
-    try { planStart = YearMonth.parse(startValue); } catch (RuntimeException ex) { return; }
-    int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 12 : member.annualContributionMonths;
-    YearMonth planEnd = planStart.plusMonths(count - 1L);
-    YearMonth first = YearMonth.of(year, 1), last = YearMonth.of(year, 12);
-    if (planEnd.isBefore(first) || planStart.isAfter(last)) return;
-    List<DuePeriodDocument> existing = dues.findByMemberIdAndMonthBetweenOrderByMonthAsc(member.id, first.toString(), last.toString());
+    if (!ContributionPeriod.isRegularMonth(startValue)) return;
+    int count = member.annualContributionMonths == null || member.annualContributionMonths < 1 ? 14 : Math.min(member.annualContributionMonths, 14);
+    String planEnd = ContributionPeriod.key(year, Math.min(count, 14));
+    // Keep the legacy 12-period query shape for old clients/tests while a
+    // 14-period plan explicitly includes the two bonus keys.
+    List<DuePeriodDocument> existing = dues.findByMemberIdAndMonthBetweenOrderByMonthAsc(member.id, ContributionPeriod.key(year, 1), planEnd);
     Set<String> existingMonths = existing.stream().map(d -> d.month).collect(java.util.stream.Collectors.toSet());
     List<DuePeriodDocument> missing = new java.util.ArrayList<>();
-    for (YearMonth month = first; !month.isAfter(last); month = month.plusMonths(1)) {
-      if (month.isBefore(planStart) || month.isAfter(planEnd) || existingMonths.contains(month.toString())) continue;
-      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month.toString(); due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.status = status(due); missing.add(due);
+    for (String period : ContributionPeriod.yearPeriods(year)) {
+      if (!ContributionPeriod.inPlan(period, startValue, count) || existingMonths.contains(period)) continue;
+      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = period; due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.seededPaid = due.amountPaid > 0; due.status = status(due); missing.add(due);
     }
     if (!missing.isEmpty()) {
       try { dues.saveAll(missing); } catch (DuplicateKeyException ignored) { /* another request materialized the same plan */ }

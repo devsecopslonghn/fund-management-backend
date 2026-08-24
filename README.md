@@ -149,6 +149,15 @@ messages are quarantined without changing dues; they are never silently assigned
 Each QR plan is scoped to one calendar year; a cross-year prepayment is split into
 one QR per year so the reference and allocation remain unambiguous.
 
+The canonical annual plan has fourteen ordered periods: `YYYY-01` through
+`YYYY-12` are calendar months and `YYYY-13`/`YYYY-14` are mandatory bonus
+periods. Bonus keys are period identifiers, not `YearMonth` values. Admins can
+manage this master plan at `GET /api/v1/admin/payment-plans?year=YYYY` and
+`PUT /api/v1/admin/members/{memberId}/payment-plan`; saving is idempotent,
+audited with before/after provenance, materializes due periods, and seeds
+selected paid periods without creating ledger income or manual payments.
+Existing ledger-paid periods cannot be silently downgraded.
+
 Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
 ### 4.1 Module A — Member Management
@@ -166,7 +175,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 
 | ID | Requirement | Note |
 |---|---|---|
-| FR-B-01 | At the start of each month, the system auto-generates one "due period" per active member, using that member's current contribution rate. | Scheduled job |
+| FR-B-01 | At the start of each month, the system auto-generates one "due period" per active member, using that member's current contribution rate; each annual plan has 12 regular periods plus mandatory bonus periods 13 and 14. | Scheduled job |
 | FR-B-02 | Each due period has a status: Unpaid / Fully Paid / Partially Paid / Overpaid (overpayment optionally rolls forward, configurable). | |
 | FR-B-03 | When a transaction is reconciled to a member, the system applies it against outstanding due periods oldest-first (FIFO). | Handles lump-sum payments covering several months at once |
 | FR-B-04 | Authenticated Admin can view each member's total paid since joining, remaining balance owed, and a month-by-month breakdown. | |
@@ -554,7 +563,7 @@ This section directs detailed UI design work (wireframes/Figma); it is not a fin
 
 ### 11.1.1 Current Implementation & Remaining MVP Work
 
-Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate with master start-month/month-count/initially-paid configuration; public year-by-year contribution board; server-priced VietQR payment plans with stable opaque 10-character member-year references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO automatic payment allocation; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly/year-plan generation; read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and annual-reference auto-match independent of unread state; unmatched-message quarantine; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
+Implemented in source: legacy roster/opening-balance import; authenticated Admin member create/edit/deactivate with audited 14-period master payment-plan API; public year-by-year 14-period contribution board; server-priced VietQR payment plans with stable opaque 10-character member-year references; shareable payment-intent details and status polling; same-origin frontend API routing through the backend Kubernetes Service; member due detail/adjustment and FIFO automatic payment allocation; expense CRUD/filter/CSV export; statistics/category reporting; audit-log UI/API; Super Admin settings; versioned OpenAPI v1.1 contract; idempotent monthly/year-plan generation; read-only Gmail OAuth/polling with distributed lease, receiving-account gating, parser and annual-reference auto-match independent of unread state; unmatched-message quarantine; notification-provider boundary with safe disabled defaults; Helm delivery with two backend replicas, anti-affinity, PDB and a daily 30-day MongoDB backup CronJob/restore runbook.
 
 Operational checks that remain intentionally gated:
 
