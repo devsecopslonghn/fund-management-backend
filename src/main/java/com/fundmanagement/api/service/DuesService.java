@@ -107,14 +107,21 @@ public class DuesService {
   }
 
   /** Indexed member lookup used by the dashboard payer panel; it avoids scanning the active roster. */
-  public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode) {
+  public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode) { return publicPaymentOptionsByMember(fullName, memberCode, null); }
+
+  /** Indexed member lookup with an optional year bound so the payer page never downloads other annual plans. */
+  public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode, Integer year) {
     List<MemberDocument> matches;
     if (isBlank(fullName) && !isBlank(memberCode)) matches = members.findByStatusAndMemberCode(MemberStatus.ACTIVE, memberCode.trim().toUpperCase(Locale.ROOT));
     else matches = members.findByStatusAndNormalizedFullName(MemberStatus.ACTIVE, memberService.normalizeName(fullName));
     if (matches.isEmpty()) throw new IllegalArgumentException("No matching member found");
     if (isBlank(memberCode) && matches.size() > 1) return new ApiDtos.PublicPaymentOptionsResponse(true, matches.stream().map(m -> new ApiDtos.PublicMemberMatch(m.fullName, m.memberCode)).toList(), List.of());
     MemberDocument member = resolvePublicMember(matches, memberCode);
-    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findPublicByMemberIdOrderByMonthAsc(member.id).stream().filter(this::hasOutstanding).map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
+    if (year != null && (year < 2000 || year > 9999)) throw new IllegalArgumentException("Year is invalid");
+    List<ApiDtos.PublicDuePeriodResponse> payable = dues.findPublicByMemberIdOrderByMonthAsc(member.id).stream()
+        .filter(p -> year == null || (p.month != null && p.month.startsWith(year + "-")))
+        .filter(this::hasOutstanding)
+        .map(p -> new ApiDtos.PublicDuePeriodResponse(p.id, p.month, outstanding(p))).toList();
     recordAudit("PUBLIC_PAYMENT_LOOKUP", member.id);
     return new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch(member.fullName, isBlank(memberCode) ? null : member.memberCode)), payable);
   }

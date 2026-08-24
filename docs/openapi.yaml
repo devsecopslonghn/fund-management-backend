@@ -48,6 +48,7 @@ paths:
       parameters:
         - { name: fullName, in: query, required: false, schema: { type: string, maxLength: 120 } }
         - { name: memberCode, in: query, required: false, schema: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' } }
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 9999 } }
       description: Indexed member lookup for the payer panel. Supply memberCode for a duplicate-name roster.
       responses:
         '200': { description: Payable periods only, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentOptions' } } } }

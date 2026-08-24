@@ -24,7 +24,7 @@ public class PublicController {
   @GetMapping("/contribution-board") public ApiDtos.PublicContributionBoardResponse contributionBoard(@RequestParam int year) { return dashboard.publicContributionBoard(year); }
   /** Name lookup returns only payable due periods. It never returns contact details or payment history. */
   @PostMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@Valid @RequestBody ApiDtos.PublicPaymentOptionsRequest request) { return dues.publicPaymentOptions(request); }
-  @GetMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@RequestParam(required = false) String fullName, @RequestParam(required = false) String memberCode) { return dues.publicPaymentOptionsByMember(fullName, memberCode); }
+  @GetMapping("/payment-options") public ApiDtos.PublicPaymentOptionsResponse paymentOptions(@RequestParam(required = false) String fullName, @RequestParam(required = false) String memberCode, @RequestParam(required = false) Integer year) { return dues.publicPaymentOptionsByMember(fullName, memberCode, year); }
   @PostMapping("/payment-intents") @ResponseStatus(HttpStatus.CREATED)
   public ApiDtos.PublicPaymentIntentResponse createPaymentIntent(@Valid @RequestBody ApiDtos.PublicPaymentIntentRequest request) { return dues.createPublicIntent(request); }
   @GetMapping("/payment-intents/{id}") public ApiDtos.PublicPaymentIntentStatusResponse paymentIntentStatus(@PathVariable String id) { return dues.publicIntentStatus(id); }
