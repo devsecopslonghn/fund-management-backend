@@ -26,6 +26,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Page;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
@@ -34,6 +38,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class DuesService {
   private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow; private final PaymentReferenceService paymentReferences; private final java.util.Optional<GmailPollingWorker> gmailPollingWorker; private final TaskExecutor taskExecutor;
+  private MongoTemplate mongoTemplate;
   /** Test-friendly constructor; production uses the audited constructor below. */
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null, null, java.util.Optional.empty(), null); }
   /** Test-friendly constructor with persisted settings. */
@@ -45,6 +50,7 @@ public class DuesService {
   /** Compatibility constructor retained for existing focused tests. */
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, java.util.Optional<GmailPollingWorker> gmailPollingWorker, TaskExecutor taskExecutor) { this(members, dues, intents, memberService, properties, audit, settings, detectionWindow, null, gmailPollingWorker, taskExecutor); }
   @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, PaymentReferenceService paymentReferences, java.util.Optional<GmailPollingWorker> gmailPollingWorker, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; this.paymentReferences = paymentReferences; this.gmailPollingWorker = gmailPollingWorker; this.taskExecutor = taskExecutor; }
+  @Autowired public void setMongoTemplate(MongoTemplate mongoTemplate) { this.mongoTemplate = mongoTemplate; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
@@ -128,10 +134,32 @@ public class DuesService {
     retained.addAll(paid);
     retained = retained.stream().distinct().sorted(ContributionPeriod.comparator()).toList();
     member.initiallyPaidMonths = new java.util.ArrayList<>(retained);
-    members.save(member);
+    persistPlanMember(member, start, count, retained);
     Map<String, Object> after = Map.of("contributionStartMonth", start, "annualContributionMonths", count, "initiallyPaidMonths", List.copyOf(retained));
     if (audit != null) audit.record(actor == null ? "unknown" : actor, "PAYMENT_PLAN_SAVED", "member", member.id, before, after);
     return paymentPlanResponse(member, request.year());
+  }
+
+  /**
+   * Imported members predate @Version and therefore have no version field.
+   * Repository.save treats those hydrated documents as new inserts, which
+   * collides on _id. Update the legacy shape in place and initialize version
+   * atomically; versioned members continue through the normal optimistic save.
+   */
+  private void persistPlanMember(MemberDocument member, String start, int count, List<String> retained) {
+    if (member.version != null || mongoTemplate == null) { members.save(member); return; }
+    Query query = Query.query(new Criteria().andOperator(
+        Criteria.where("_id").is(member.id),
+        new Criteria().orOperator(Criteria.where("version").exists(false), Criteria.where("version").is(null))));
+    Update update = new Update()
+        .set("contributionStartMonth", start)
+        .set("annualContributionMonths", count)
+        .set("initiallyPaidMonths", retained)
+        .set("version", 1L);
+    if (mongoTemplate.updateFirst(query, update, MemberDocument.class).getMatchedCount() != 1) {
+      throw new org.springframework.dao.OptimisticLockingFailureException("Member payment plan was changed by another user");
+    }
+    member.version = 1L;
   }
 
   private ApiDtos.PaymentPlanResponse paymentPlanResponse(MemberDocument member, int year) {
