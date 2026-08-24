@@ -63,7 +63,9 @@ public class IngestionService {
     BankTransactionDocument claimed = mongo.findAndModify(query, claim, FindAndModifyOptions.options().returnNew(true), BankTransactionDocument.class);
     if (claimed == null) return;
     try {
-      List<PaymentIntentDocument> matches = intents.findByStatus(IntentStatus.PENDING).stream().filter(i -> exactIntentMatch(i, claimed)).toList();
+      // Amount/status/expiry are indexed, so a bank alert does not scan every
+      // historical pending intent before checking the exact opaque content.
+      List<PaymentIntentDocument> matches = intents.findByStatusAndTotalAmountAndExpiresAtAfter(IntentStatus.PENDING, claimed.amount, Instant.now()).stream().filter(i -> exactIntentMatch(i, claimed)).toList();
       PaymentIntentDocument intent = matches.size() == 1 ? matches.getFirst() : null;
       Integer annualYear = null;
       if (intent == null && references != null) {
