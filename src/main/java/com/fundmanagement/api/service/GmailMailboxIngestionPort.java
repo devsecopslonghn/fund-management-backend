@@ -17,6 +17,8 @@ import java.util.Set;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.stream.Collectors;
 import com.fundmanagement.api.repository.BankTransactionRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -28,6 +30,37 @@ import org.springframework.stereotype.Component;
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions; private final SacombankMessageParser parser;
   public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions, SacombankMessageParser parser) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.parser = parser; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
+
+  /** Super-admin diagnostic; returns raw MIME only when explicitly requested and never logs it. */
+  public List<GmailDiagnosticMessage> diagnosticMessages(boolean includeRaw) {
+    String token = oauth.accessToken(); String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
+    String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
+    String query = URLEncoder.encode(gmailSearchQuery(expected), StandardCharsets.UTF_8);
+    Map<String, String> threadByMessage = new LinkedHashMap<>(); String pageToken = "";
+    do {
+      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
+      if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
+      JsonNode list = get(url, token);
+      for (JsonNode item : list.path("messages")) {
+        String id = item.path("id").asText(""); if (!id.isBlank()) threadByMessage.put(id, item.path("threadId").asText(""));
+      }
+      pageToken = list.path("nextPageToken").asText("");
+    } while (!pageToken.isBlank());
+    Map<String, String> expanded = new LinkedHashMap<>(threadByMessage);
+    for (String threadId : new LinkedHashSet<>(threadByMessage.values())) if (!threadId.isBlank()) for (String id : threadMessageIds(mailbox, token, threadId)) expanded.putIfAbsent(id, threadId);
+    List<GmailDiagnosticMessage> result = new ArrayList<>();
+    for (Map.Entry<String, String> entry : expanded.entrySet()) {
+      String raw = rawMessage(mailbox, entry.getKey(), token); SacombankMessageParser.ParsedBankMessage parsed = null;
+      try { parsed = parser.parse(raw); } catch (RuntimeException ignored) { }
+      String account = parsed == null ? null : parsed.accountNumber(); String digits = account == null ? "" : account.replaceAll("\\D", "");
+      result.add(new GmailDiagnosticMessage(entry.getKey(), entry.getValue(), raw.length(), raw.contains("MIME-Version:"), raw.contains("Content-Type:"), digits.length(), maskAccount(digits), expected.equals(digits), parsed == null ? null : parsed.amount(), parsed == null ? null : parsed.direction(), parsed == null ? null : parsed.parsedContent(), includeRaw ? raw : null));
+    }
+    return result;
+  }
+
+  public record GmailDiagnosticMessage(String messageId, String threadId, int rawLength, boolean hasMimeVersion, boolean hasContentType, int parsedAccountDigits, String parsedAccountMasked, boolean parsedAccountMatchesConfigured, Long parsedAmount, String parsedDirection, String parsedContent, String rawPayload) {}
+
+  private String maskAccount(String digits) { if (digits == null || digits.isBlank()) return null; return digits.substring(0, Math.min(2, digits.length())) + "…" + digits.substring(Math.max(0, digits.length() - 4)); }
   /**
    * Reads every message matching the configured receiving account.
    *
