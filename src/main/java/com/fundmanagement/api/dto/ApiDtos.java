@@ -69,6 +69,11 @@ public final class ApiDtos {
   public record PublicPaymentDashboardDue(String id, String month, long amountDue, long amountPaid, long outstandingAmount, DueStatus status, String displayStatus) {
     public PublicPaymentDashboardDue(String id, String month, long amountDue, long amountPaid, long outstandingAmount, DueStatus status) { this(id, month, amountDue, amountPaid, outstandingAmount, status, status == null ? "NOT_OPENED" : status.name()); }
   }
+  /** Public member payment history. It deliberately contains no contact, bank, or reconciliation data. */
+  public record PublicPaymentHistoryResponse(String memberCode, String fullName, Integer year, long totalDue, long totalPaid, long outstandingAmount, List<PublicPaymentHistoryEntry> periods) {}
+  public record PublicPaymentHistoryEntry(String id, String month, long amountDue, long amountPaid, long outstandingAmount, DueStatus status) {}
+  /** Safe detail read model used after selecting a member from the public board. */
+  public record PublicPaymentDetailResponse(String memberCode, String fullName, Integer year, long totalDue, long totalPaid, long outstandingAmount, List<PublicPaymentHistoryEntry> periods) {}
   /** Lightweight year board contract. It intentionally mirrors the legacy response so clients can migrate without a data-shape fork. */
   public record PublicContributionBoardResponse(long balance, long incomeThisMonth, long expenseThisMonth, List<MonthlySeriesResponse> monthlySeries, List<PublicPaymentDashboardMember> members, int year, List<String> months) {}
   public record PaymentPlanRequest(@Min(2000) @Max(9999) int year, @NotBlank @Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-2])$") String contributionStartMonth, @Min(1) @Max(14) Integer annualContributionMonths, List<@Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-4])$") String> paidPeriods, Long expectedVersion) {}

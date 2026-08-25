@@ -218,6 +218,56 @@ public class DuesService {
   /** Indexed member lookup used by the dashboard payer panel; it avoids scanning the active roster. */
   public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode) { return publicPaymentOptionsByMember(fullName, memberCode, null); }
 
+  /**
+   * Returns the safe, public payment ledger for one active member.  The member
+   * code is the only public selector; names are returned for display only.
+   * No bank transaction, payment reference, email, phone, or audit fields are
+   * included in this read model.
+   */
+  public ApiDtos.PublicPaymentHistoryResponse publicPaymentHistory(String memberCode, Integer year) {
+    MemberDocument member = publicMemberByCode(memberCode);
+    validateOptionalYear(year);
+    List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(member.id).stream()
+        .filter(period -> year == null || (period.month != null && period.month.startsWith(year + "-")))
+        .filter(period -> inMemberPlan(member, period.month))
+        .toList();
+    long totalDue = 0;
+    long totalPaid = 0;
+    List<ApiDtos.PublicPaymentHistoryEntry> entries = new java.util.ArrayList<>();
+    for (DuePeriodDocument period : periods) {
+      try {
+        totalDue = Math.addExact(totalDue, period.amountDue);
+        totalPaid = Math.addExact(totalPaid, period.amountPaid);
+      } catch (ArithmeticException ex) {
+        throw new IllegalArgumentException("Payment totals are too large");
+      }
+      entries.add(new ApiDtos.PublicPaymentHistoryEntry(period.id, period.month, period.amountDue,
+          period.amountPaid, outstanding(period), period.status));
+    }
+    recordAudit("PUBLIC_PAYMENT_HISTORY_LOOKUP", member.id);
+    return new ApiDtos.PublicPaymentHistoryResponse(member.memberCode, member.fullName, year,
+        totalDue, totalPaid, Math.max(0, totalDue - totalPaid), List.copyOf(entries));
+  }
+
+  /** Alias read model for clients that call the selected member view “detail”. */
+  public ApiDtos.PublicPaymentDetailResponse publicPaymentDetail(String memberCode, Integer year) {
+    ApiDtos.PublicPaymentHistoryResponse history = publicPaymentHistory(memberCode, year);
+    return new ApiDtos.PublicPaymentDetailResponse(history.memberCode(), history.fullName(), history.year(),
+        history.totalDue(), history.totalPaid(), history.outstandingAmount(), history.periods());
+  }
+
+  private MemberDocument publicMemberByCode(String memberCode) {
+    if (isBlank(memberCode) || !memberCode.trim().matches("[A-Za-z0-9_-]{2,32}")) {
+      throw new IllegalArgumentException("Member code is invalid");
+    }
+    return members.findByStatusAndMemberCode(MemberStatus.ACTIVE, memberCode.trim().toUpperCase(Locale.ROOT))
+        .stream().findFirst().orElseThrow(() -> new IllegalArgumentException("No matching member found"));
+  }
+
+  private void validateOptionalYear(Integer year) {
+    if (year != null && (year < 2000 || year > 9999)) throw new IllegalArgumentException("Year is invalid");
+  }
+
   /** Indexed member lookup with an optional year bound so the payer page never downloads other annual plans. */
   public ApiDtos.PublicPaymentOptionsResponse publicPaymentOptionsByMember(String fullName, String memberCode, Integer year) {
     List<MemberDocument> matches;

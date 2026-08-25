@@ -80,6 +80,30 @@ class DuesServiceTest {
     assertThat(result.duePeriods().getFirst().outstandingAmount()).isEqualTo(80_000);
   }
 
+  @Test void publicHistoryResolvesByCodeAndContainsOnlySafeDueData() {
+    MemberDocument member = member("m-history", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";
+    DuePeriodDocument partial = due("due-1", "2026-08", 100_000, 20_000);
+    DuePeriodDocument paid = due("due-2", "2026-09", 100_000, 100_000);
+    when(members.findByStatusAndMemberCode(MemberStatus.ACTIVE, "A001")).thenReturn(List.of(member));
+    when(dues.findByMemberIdOrderByMonthAsc("m-history")).thenReturn(List.of(partial, paid));
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+
+    ApiDtos.PublicPaymentHistoryResponse result = service.publicPaymentHistory("a001", 2026);
+
+    assertThat(result.memberCode()).isEqualTo("A001");
+    assertThat(result.totalDue()).isEqualTo(200_000);
+    assertThat(result.totalPaid()).isEqualTo(120_000);
+    assertThat(result.outstandingAmount()).isEqualTo(80_000);
+    assertThat(result.periods()).extracting(ApiDtos.PublicPaymentHistoryEntry::month).containsExactly("2026-08", "2026-09");
+  }
+
+  @Test void publicHistoryRejectsUnknownOrMalformedCode() {
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+    assertThatThrownBy(() -> service.publicPaymentHistory("bad code", null)).isInstanceOf(IllegalArgumentException.class);
+    when(members.findByStatusAndMemberCode(MemberStatus.ACTIVE, "UNKNOWN")).thenReturn(List.of());
+    assertThatThrownBy(() -> service.publicPaymentHistory("unknown", null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
   @Test void indexedYearLookupMaterializesConfiguredAnnualPlanBeforeReturningOptions() {
     MemberDocument member = member("m-annual", "2026-01"); member.fullName = "Hoa Trắc Điểm"; member.memberCode = "DIEMHT15476"; member.contributionStartMonth = "2026-01"; member.annualContributionMonths = 12;
     when(members.findByStatusAndMemberCode(MemberStatus.ACTIVE, "DIEMHT15476")).thenReturn(List.of(member));

@@ -47,6 +47,19 @@ class PublicPaymentSecurityTest {
         .andExpect(jsonPath("$.members[0].duePeriods[0].rawPayload").doesNotExist());
   }
 
+  @Test void anonymousMemberHistoryReturnsOnlySafePeriodAggregates() throws Exception {
+    ApiDtos.PublicPaymentHistoryResponse history = new ApiDtos.PublicPaymentHistoryResponse(
+        "A001", "Nguyễn Văn A", 2026, 200_000, 100_000, 100_000,
+        List.of(new ApiDtos.PublicPaymentHistoryEntry("due-1", "2026-08", 100_000, 100_000, 0, com.fundmanagement.api.domain.DueStatus.PAID)));
+    when(dues.publicPaymentHistory("A001", 2026)).thenReturn(history);
+    mvc.perform(get("/api/v1/public/payment-history").param("memberCode", "A001").param("year", "2026"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.memberCode").value("A001"))
+        .andExpect(jsonPath("$.periods[0].amountPaid").value(100_000))
+        .andExpect(jsonPath("$.periods[0].rawPayload").doesNotExist())
+        .andExpect(jsonPath("$.periods[0].providerMessageId").doesNotExist());
+  }
+
   @Test void anonymousPayerCanCreateIntentWithoutAuthentication() throws Exception {
     when(dues.createPublicIntent(any())).thenReturn(new ApiDtos.PublicPaymentIntentResponse("intent-1", 100_000, "QUY A001 082026", "https://qr.invalid/image", "QUY CHUNG", "123456789", "Test Bank", Instant.parse("2026-08-24T01:00:00Z"), IntentStatus.PENDING));
     mvc.perform(post("/api/v1/public/payment-intents").contentType(MediaType.APPLICATION_JSON).content("{\"fullName\":\"Nguyễn Văn A\",\"duePeriodIds\":[\"due-1\"]}"))

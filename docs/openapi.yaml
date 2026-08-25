@@ -52,6 +52,28 @@ paths:
       description: Indexed member lookup for the payer panel. Supply memberCode for a duplicate-name roster.
       responses:
         '200': { description: Payable periods only, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentOptions' } } } }
+  /public/payment-history:
+    get:
+      tags: [Public]
+      operationId: getPublicMemberPaymentHistory
+      parameters:
+        - { name: memberCode, in: query, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' } }
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 9999 } }
+      description: Safe member payment history selected by member code. Returns due-period aggregates only; excludes contact data, raw bank messages, payment references, and audit details.
+      responses:
+        '200': { description: Public-safe payment history, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentHistory' } } } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /public/payment-details:
+    get:
+      tags: [Public]
+      operationId: getPublicMemberPaymentDetails
+      parameters:
+        - { name: memberCode, in: query, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' } }
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 9999 } }
+      description: Alias read model for the member payment detail page; the response is the same safe period-level projection as payment history.
+      responses:
+        '200': { description: Public-safe payment detail, content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentDetail' } } } }
+        '400': { $ref: '#/components/responses/ValidationError' }
   /public/payment-intents/{id}:
     get:
       tags: [Public]
@@ -372,6 +394,9 @@ components:
     PublicPaymentOptions: { type: object, properties: { requiresMemberCode: { type: boolean }, matches: { type: array, items: { $ref: '#/components/schemas/PublicMemberMatch' } }, duePeriods: { type: array, items: { $ref: '#/components/schemas/PublicDuePeriod' } } } }
     PublicMemberMatch: { type: object, properties: { fullName: { type: string }, memberCode: { type: string, nullable: true } } }
     PublicDuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, outstandingAmount: { type: integer, format: int64 } } }
+    PublicPaymentHistory: { type: object, required: [memberCode, fullName, totalDue, totalPaid, outstandingAmount, periods], properties: { memberCode: { type: string }, fullName: { type: string }, year: { type: integer, nullable: true }, totalDue: { type: integer, format: int64 }, totalPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, periods: { type: array, items: { $ref: '#/components/schemas/PublicPaymentHistoryEntry' } } } }
+    PublicPaymentDetail: { allOf: [{ $ref: '#/components/schemas/PublicPaymentHistory' }] }
+    PublicPaymentHistoryEntry: { type: object, required: [month, amountDue, amountPaid, outstandingAmount], properties: { id: { type: string, nullable: true }, month: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-4])$' }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, outstandingAmount: { type: integer, format: int64 }, status: { type: string, nullable: true, enum: [UNPAID, PARTIAL, PAID, OVERPAID] } } }
     PersonalOverview: { type: object, properties: { member: { $ref: '#/components/schemas/PersonalMember' }, totalPaid: { type: integer, format: int64 }, totalOwed: { type: integer, format: int64 }, duePeriods: { type: array, items: { $ref: '#/components/schemas/DuePeriod' } } } }
     PersonalMember: { type: object, properties: { id: { type: string }, fullName: { type: string }, memberCode: { type: string } } }
     DuePeriod: { type: object, properties: { id: { type: string }, month: { type: string }, amountDue: { type: integer, format: int64 }, amountPaid: { type: integer, format: int64 }, status: { type: string, enum: [UNPAID, PARTIAL, PAID, OVERPAID] }, notes: { type: string, nullable: true } } }
