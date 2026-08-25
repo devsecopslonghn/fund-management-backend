@@ -26,8 +26,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(prefix = "app.gmail", name = "enabled", havingValue = "true")
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
-  private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions;
-  public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
+  private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions; private final SacombankMessageParser parser;
+  public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions, SacombankMessageParser parser) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.parser = parser; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
   /**
    * Reads every message matching the configured receiving account.
    *
@@ -42,7 +42,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
     String query = URLEncoder.encode(gmailSearchQuery(expectedAccount), StandardCharsets.UTF_8);
-    List<String> candidateIds = new ArrayList<>();
+    List<String> candidateIds = new ArrayList<>(); List<String> threadIds = new ArrayList<>();
     String pageToken = "";
     do {
       String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
@@ -51,9 +51,13 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       for (JsonNode item : list.path("messages")) {
         String id = item.path("id").asText("");
         if (!id.isBlank()) candidateIds.add(id);
+        String threadId = item.path("threadId").asText("");
+        if (!threadId.isBlank()) threadIds.add(threadId);
       }
       pageToken = list.path("nextPageToken").asText("");
     } while (!pageToken.isBlank());
+    for (String threadId : threadIds) candidateIds.addAll(threadMessageIds(mailbox, token, threadId));
+    candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
     // scans therefore fetch only provider IDs not already persisted locally.
@@ -95,8 +99,28 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
 
   private List<MailboxMessage> fetchNewMessages(String mailbox, String token, Collection<String> ids, Set<String> known) {
     List<MailboxMessage> messages = new ArrayList<>();
-    for (String id : ids) if (!known.contains(id)) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
+    for (String id : ids) if (!known.contains(id)) {
+      String raw = rawMessage(mailbox, id, token);
+      if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
+    }
     return messages;
+  }
+  private List<String> threadMessageIds(String mailbox, String token, String threadId) {
+    String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/threads/" + URLEncoder.encode(threadId, StandardCharsets.UTF_8) + "?format=minimal";
+    JsonNode thread = get(url, token); List<String> ids = new ArrayList<>();
+    for (JsonNode message : thread.path("messages")) { String id = message.path("id").asText(""); if (!id.isBlank()) ids.add(id); }
+    return ids;
+  }
+  private boolean isConfiguredReceivingAlert(String raw) {
+    String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
+    if (expected.isBlank()) return false;
+    try {
+      SacombankMessageParser.ParsedBankMessage parsed = parser.parse(raw);
+      String actual = parsed.accountNumber() == null ? "" : parsed.accountNumber().replaceAll("\\D", "");
+      if (expected.equals(actual)) return true;
+    } catch (RuntimeException ignored) { }
+    String normalized = raw.replaceAll("(?s)<[^>]*>", " ").replaceAll("\\D", "");
+    return normalized.contains(expected);
   }
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
