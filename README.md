@@ -213,7 +213,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | FR-E-06 | Outgoing (-) transactions are logged in the bank-transaction ledger and manually cross-checked against the Expense table (not auto-created as expenses, to avoid mislabeling purpose). | |
 | FR-E-07 | Raw email payloads are retained for at least 12 months for dispute resolution. | |
 | FR-E-08 | Retry and alerting mechanisms when the mailbox connection drops or parsing fails repeatedly. | Observability — see §5, §8 |
-| FR-E-09 | Gmail rescans ignore transactions already marked `REVERSED`; reverse/cancel never deletes the provider message or ledger row and is idempotently blocked on repeat attempts. | Prevents a later 30-minute/full scan from re-crediting a cancelled payment |
+| FR-E-09 | Gmail rescans ignore transactions already marked `REVERSED`; reverse/cancel never deletes the provider message or ledger row and is idempotently blocked on repeat attempts. | Prevents a later periodic/full scan from re-crediting a cancelled payment |
 
 ### 4.6 Module F — Statistics & Reporting (Dashboard)
 
@@ -571,7 +571,7 @@ Operational checks that remain intentionally gated:
 
 - Historical workbook ledger is retained with provenance; the one-time master import provisions only the configured start month, plan length and initially paid months. It does not require recurring Admin reconciliation.
 - Let CI publish the images and ArgoCD roll the chart, then verify two ready backend Pods on eligible nodes and a successful backup Job/restore drill.
-- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger, five-minute fast polling, and 30-minute full mailbox reconciliation flow exist; email delivery remains disabled rather than using invented credentials.
+- Provision Gmail OAuth read-only credentials and the SMTP Secret. The parser, idempotent ledger, five-minute fast polling, and one-minute full mailbox reconciliation fallback exist; email delivery remains disabled rather than using invented credentials.
 - Verify a generated VietQR with two banking apps and add browser-level E2E coverage against the deployed public payer and Admin workflows.
 
 ### 11.2 Phase 2 — Reconciliation Automation

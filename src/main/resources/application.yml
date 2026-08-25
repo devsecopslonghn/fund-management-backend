@@ -63,7 +63,10 @@ app:
     state-ttl-seconds: ${FUND_GMAIL_OAUTH_STATE_TTL_SECONDS:600}
     lease-duration-seconds: ${FUND_GMAIL_POLL_LEASE_SECONDS:900}
     intent-match-seconds: ${FUND_GMAIL_INTENT_MATCH_SECONDS:300}
-    batch-poll-interval-ms: ${FUND_GMAIL_BATCH_POLL_INTERVAL_MS:1800000}
+    # Full mailbox reconciliation fallback. Keep this at one minute for
+    # non-QR/manual transfers; deployments can override via the env var.
+    batch-poll-interval-ms: ${FUND_GMAIL_BATCH_POLL_INTERVAL_MS:60000}
+    scheduler-tick-ms: ${FUND_GMAIL_SCHEDULER_TICK_MS:10000}
     fast-poll-interval-ms: ${FUND_GMAIL_FAST_POLL_INTERVAL_MS:5000}
     authorize-endpoint: ${FUND_GMAIL_OAUTH_AUTHORIZE_ENDPOINT:https://accounts.google.com/o/oauth2/v2/auth}
     token-endpoint: ${FUND_GMAIL_OAUTH_TOKEN_ENDPOINT:https://oauth2.googleapis.com/token}

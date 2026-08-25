@@ -8,20 +8,27 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Opt-in polling fallback; duplicate Gmail deliveries are absorbed by providerMessageId. */
 @Component
 @ConditionalOnProperty(prefix = "app.gmail", name = "polling-enabled", havingValue = "true")
 public class GmailPollingWorker {
   private static final Logger log = LoggerFactory.getLogger(GmailPollingWorker.class);
-  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow;
+  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow; private final SettingsService settings; private final AtomicLong lastBatchPollAt = new AtomicLong(0);
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null); }
-  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; }
-  /** Full mailbox reconciliation. The five-second schedule below is reserved for active QR windows. */
-  @Scheduled(fixedDelayString = "${app.gmail.batch-poll-interval-ms:1800000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null, null); }
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this(mailbox, ingestion, leaseService, detectionWindow, null); }
+  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow, SettingsService settings) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; this.settings = settings; }
+  /** Full mailbox reconciliation. The ten-second scheduler tick only checks the persisted interval; it does not call Gmail unless due. */
+  @Scheduled(fixedDelayString = "${app.gmail.scheduler-tick-ms:10000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
   public void poll() {
     if (detectionWindow != null && safeWindowActive()) return;
+    long now = System.currentTimeMillis();
+    long interval = configuredBatchIntervalMs();
+    long previous = lastBatchPollAt.get();
+    if (previous > 0 && now - previous < interval) return;
+    if (!lastBatchPollAt.compareAndSet(previous, now)) return;
     runPoll();
   }
   /** Five-second schedule is cheap while idle; Gmail is only queried during an active window. */
@@ -47,4 +54,13 @@ public class GmailPollingWorker {
     finally { try { leaseService.release(acquired.get()); } catch (RuntimeException ignored) { /* TTL expiry remains the fallback. */ } }
   }
   private boolean safeWindowActive() { try { return detectionWindow.isActive(); } catch (RuntimeException ignored) { return false; } }
+  private long configuredBatchIntervalMs() {
+    try {
+      if (settings != null) {
+        var current = settings.get();
+        if (current != null) return Math.max(60_000L, Math.min(3_600_000L, current.gmailBatchPollIntervalSeconds() * 1_000L));
+      }
+    } catch (RuntimeException ignored) { /* Fall back to the safe default if settings are unavailable. */ }
+    return 60_000L;
+  }
 }

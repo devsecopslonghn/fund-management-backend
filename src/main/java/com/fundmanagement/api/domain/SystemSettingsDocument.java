@@ -19,6 +19,8 @@ public class SystemSettingsDocument {
   public boolean ingestionEnabled;
   public boolean gmailEnabled;
   public String gmailSenderFilter;
+  /** Full-mailbox polling interval controlled by Super Admin; stored in seconds. */
+  public Integer gmailBatchPollIntervalSeconds;
   public boolean smtpEnabled;
   public String smtpHost;
   public int smtpPort;

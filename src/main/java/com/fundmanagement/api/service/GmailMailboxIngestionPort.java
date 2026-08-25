@@ -30,7 +30,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
    * Reads every message matching the configured receiving account.
    *
    * <p>The query intentionally does not require an unread label. Gmail messages
-   * are paged in batches of 100 so a 30-minute reconciliation run can catch
+   * are paged in batches of 100 so the periodic reconciliation run can catch
    * alerts that arrived while the mailbox was already opened or while the
    * application was unavailable. Provider message IDs make repeated scans
    * idempotent in {@link IngestionService}.
