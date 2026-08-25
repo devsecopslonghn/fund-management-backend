@@ -9,6 +9,8 @@ import com.fundmanagement.api.domain.DueStatus;
 import com.fundmanagement.api.domain.ManualPaymentDocument;
 import com.fundmanagement.api.domain.MemberDocument;
 import com.fundmanagement.api.domain.PaymentAllocation;
+import com.fundmanagement.api.domain.PaymentIntentDocument;
+import com.fundmanagement.api.domain.IntentStatus;
 import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.repository.DuePeriodRepository;
 import com.fundmanagement.api.repository.ManualPaymentRepository;
@@ -47,6 +49,18 @@ class PaymentServiceTest {
     ApiDtos.PaymentReversalResponse result = service.reverse("payment-1", "admin", "Test payment rollback");
 
     assertThat(result.amount()).isEqualTo(100_000); assertThat(payment.reversed).isTrue(); assertThat(payment.reversalReason).isEqualTo("Test payment rollback"); assertThat(june.amountPaid).isZero(); assertThat(june.status).isEqualTo(DueStatus.UNPAID); assertThat(june.payments).isEmpty();
+  }
+  @Test void intentAllocationDoesNotFallBackToOlderMemberPeriods() {
+    DuePeriodDocument july = due("july", "2026-07", 100_000, 0);
+    DuePeriodDocument september = due("september", "2026-09", 100_000, 0);
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.id = "intent-1"; intent.memberId = "member-1"; intent.totalAmount = 100_000; intent.duePeriodIds = List.of("september"); intent.status = IntentStatus.PENDING;
+    when(members.get("member-1")).thenReturn(member); when(payments.findByIdempotencyKey("gmail:provider-1")).thenReturn(Optional.empty()); when(payments.insert(org.mockito.ArgumentMatchers.<ManualPaymentDocument>any())).thenAnswer(invocation -> invocation.getArgument(0)); when(dues.findByMemberIdAndIdIn("member-1", java.util.Set.of("september"))).thenReturn(List.of(september)); when(intents.findByMemberId("member-1")).thenReturn(List.of(intent));
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    ApiDtos.ManualPaymentResponse result = service.recordForIntent(intent, 100_000, Instant.parse("2026-09-10T00:00:00Z"), "gmail:provider-1", "system:gmail-auto");
+
+    assertThat(result.unallocatedAmount()).isZero(); assertThat(result.allocations()).extracting(ApiDtos.AllocationResponse::duePeriodId).containsExactly("september"); assertThat(july.amountPaid).isZero(); assertThat(september.amountPaid).isEqualTo(100_000); assertThat(september.status).isEqualTo(DueStatus.PAID);
   }
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = DueStatus.UNPAID; return value; }
 }

@@ -48,7 +48,7 @@ class DuesServiceTest {
     ArgumentCaptor<com.fundmanagement.api.domain.DuePeriodDocument> captor = ArgumentCaptor.forClass(com.fundmanagement.api.domain.DuePeriodDocument.class);
     org.mockito.Mockito.verify(dues).save(captor.capture());
     assertThat(result.created()).isEqualTo(1); assertThat(result.skipped()).isEqualTo(1); assertThat(captor.getValue().memberId).isEqualTo("m-1"); assertThat(captor.getValue().amountDue).isEqualTo(200_000L);
-    verify(paymentReferences).referenceFor("m-1", "2026-08");
+    verify(paymentReferences, org.mockito.Mockito.never()).referenceFor(anyString(), anyString());
   }
   @Test void anonymousLookupRequiresMemberCodeWhenNamesCollide() {
     MemberDocument first = member("m-1", "2026-07"); first.fullName = "Nguyễn Văn A"; first.memberCode = "A001";
@@ -131,13 +131,12 @@ class DuesServiceTest {
     when(dues.findByMemberIdAndIdIn("m-1", java.util.Set.of("due-1"))).thenReturn(List.of(unpaid));
     FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("123456789"); properties.setAccountHolder("TEST FUND");
     when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-    when(paymentReferences.referenceFor("m-1", "2026-08")).thenReturn("AB12CD34EF");
     DuesService service = new DuesService(members, dues, intents, memberService, properties, null, null, paymentReferences);
 
     ApiDtos.PublicPaymentIntentResponse result = service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
 
     assertThat(result.amount()).isEqualTo(80_000);
-    assertThat(result.transferContent()).isEqualTo("AB12CD34EF");
+    assertThat(result.transferContent()).isEqualTo("A001");
     assertThatThrownBy(() -> service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-2"))))
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("invalid");
   }
@@ -151,14 +150,13 @@ class DuesServiceTest {
     when(intents.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(settings.get()).thenReturn(new ApiDtos.SettingsResponse(100_000, .85, "Sacombank Updated", "970499", "99887766", "UPDATED FUND HOLDER", false, false, false, false, "", false, "", 587, ""));
     FundProperties properties = new FundProperties(); properties.setBankCode("970422"); properties.setAccountNumber("old-account"); properties.setAccountHolder("OLD HOLDER");
-    when(paymentReferences.referenceFor("m-1", "2026-08")).thenReturn("ZX90QW12ER");
     DuesService service = new DuesService(members, dues, intents, memberService, properties, settings, detectionWindow, paymentReferences);
 
     ApiDtos.PublicPaymentIntentResponse result = service.createPublicIntent(new ApiDtos.PublicPaymentIntentRequest("Nguyễn Văn A", null, List.of("due-1")));
 
     assertThat(result.bankName()).isEqualTo("Sacombank Updated"); assertThat(result.accountNumber()).isEqualTo("99887766"); assertThat(result.accountHolder()).isEqualTo("UPDATED FUND HOLDER"); assertThat(result.qrImageUrl()).contains("970499-99887766");
     verify(detectionWindow).open(java.time.Duration.ofMinutes(5));
-    assertThat(result.transferContent()).isEqualTo("ZX90QW12ER");
+    assertThat(result.transferContent()).isEqualTo("A001");
   }
   @Test void creatingPublicIntentQueuesOneImmediateGmailPoll() {
     MemberDocument member = member("m-1", "2026-07"); member.fullName = "Nguyễn Văn A"; member.memberCode = "A001";

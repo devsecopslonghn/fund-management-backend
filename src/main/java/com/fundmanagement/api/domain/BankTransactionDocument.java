@@ -21,6 +21,9 @@ public class BankTransactionDocument {
   public Long availableBalance;
   @Indexed public String reconciliationStatus;
   public List<MatchCandidate> matchCandidates = new ArrayList<>();
+  /** Safe reconciliation metadata for the Admin review queue. */
+  public String matchMethod;
+  public String conflictReason;
   public String matchedMemberId;
   public List<String> matchedDuePeriodIds = new ArrayList<>();
   public String reviewedBy;

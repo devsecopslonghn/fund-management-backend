@@ -86,7 +86,13 @@ public final class ApiDtos {
   public record AuditLogResponse(String id, String actor, String action, String entityType, String entityId, Map<String, Object> before, Map<String, Object> after, Instant timestamp) {}
   public record AuditLogPageResponse(List<AuditLogResponse> content, int page, int size, long totalElements) {}
   public record ExpenseReportResponse(long totalExpense, Map<String, Long> byCategory, List<MonthlySeriesResponse> monthlySeries) {}
-  public record BankTransactionResponse(String id, String providerMessageId, Instant occurredAt, long amount, String direction, String parsedContent, Long availableBalance, String reconciliationStatus, String matchedMemberId, List<String> matchedDuePeriodIds, Instant createdAt) {}
+  public record ReconciliationMatchCandidate(String memberId, double confidence, List<String> signals) {}
+  public record BankTransactionResponse(String id, String providerMessageId, Instant occurredAt, long amount, String direction, String parsedContent, Long availableBalance, String reconciliationStatus, String matchedMemberId, List<String> matchedDuePeriodIds, Instant createdAt, String matchMethod, String conflictReason, List<ReconciliationMatchCandidate> matchCandidates) {
+    /** Compatibility constructor for callers that only need the original ledger projection. */
+    public BankTransactionResponse(String id, String providerMessageId, Instant occurredAt, long amount, String direction, String parsedContent, Long availableBalance, String reconciliationStatus, String matchedMemberId, List<String> matchedDuePeriodIds, Instant createdAt) {
+      this(id, providerMessageId, occurredAt, amount, direction, parsedContent, availableBalance, reconciliationStatus, matchedMemberId, matchedDuePeriodIds, createdAt, null, null, List.of());
+    }
+  }
   public record ReconciliationPageResponse(List<BankTransactionResponse> content, int page, int size, long totalElements) {}
   public record BankTransactionIngestionRequest(@NotBlank @Size(max = 255) String providerMessageId, @NotBlank @Size(max = 500000) String rawPayload) {}
   public record ReconciliationReviewRequest(@NotNull Boolean ignore, String memberId, @Size(max = 500) String note) {}

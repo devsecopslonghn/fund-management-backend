@@ -56,7 +56,10 @@ public class DuesService {
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
       if (month.compareTo(member.baselineMonth) < 0 || dues.findByMemberIdAndMonth(member.id, month).isPresent()) { skipped++; continue; }
       DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = initiallyPaid(member, month) ? due.amountDue : 0; due.status = status(due);
-      try { dues.save(due); if (paymentReferences != null) paymentReferences.referenceFor(member.id, month); created++; } catch (DuplicateKeyException duplicate) { skipped++; }
+      // New payment flows identify the payer by the stable member code. Keep
+      // the legacy reference service injectable so old data can still be
+      // reconciled, but do not mint random references while generating dues.
+      try { dues.save(due); created++; } catch (DuplicateKeyException duplicate) { skipped++; }
     }
     return new ApiDtos.GenerationResult(month, created, skipped);
   }
@@ -313,7 +316,12 @@ public class DuesService {
       try { amount = Math.addExact(amount, outstanding); } catch (ArithmeticException ex) { throw new IllegalArgumentException("Payment amount is too large"); }
     }
     String month = periods.stream().map(p -> p.month).min(Comparator.naturalOrder()).orElseThrow();
-    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().sorted(Comparator.comparing(p -> p.month)).map(p -> p.id).toList(); intent.totalAmount = amount; intent.referenceYear = Integer.parseInt(month.substring(0, 4)); intent.selectionMode = request.selectionMode() == null || request.selectionMode().isBlank() ? "EXPLICIT" : request.selectionMode(); intent.requestedMonthCount = request.monthCount(); intent.throughMonth = request.throughMonth(); intent.transferContent = annualReference(member.id, intent.referenceYear, month); intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
+    PaymentIntentDocument intent = new PaymentIntentDocument(); intent.memberId = member.id; intent.duePeriodIds = periods.stream().sorted(Comparator.comparing(p -> p.month)).map(p -> p.id).toList(); intent.totalAmount = amount; intent.referenceYear = Integer.parseInt(month.substring(0, 4)); intent.selectionMode = request.selectionMode() == null || request.selectionMode().isBlank() ? "EXPLICIT" : request.selectionMode(); intent.requestedMonthCount = request.monthCount(); intent.throughMonth = request.throughMonth();
+    // The QR is intentionally independent of the public website and annual
+    // plan. The stable company userid/memberCode is the only new identifier.
+    // referenceYear remains metadata for historical reporting and allocation.
+    intent.transferContent = member.memberCode;
+    intent.createdAt = Instant.now(); intent.expiresAt = intent.createdAt.plusSeconds(properties.getPaymentIntentMinutes() * 60L); intent.status = IntentStatus.PENDING; intents.save(intent);
     if (detectionWindow != null) detectionWindow.open(java.time.Duration.ofMinutes(5));
     triggerImmediateGmailPoll();
     recordAudit("PUBLIC_PAYMENT_INTENT_CREATED", member.id);
@@ -341,12 +349,6 @@ public class DuesService {
     if ("MONTH_COUNT".equals(mode)) { if (request.monthCount() == null) throw new IllegalArgumentException("monthCount is required"); return outstanding.stream().limit(request.monthCount()).map(p -> p.id).toList(); }
     if ("THROUGH_MONTH".equals(mode)) { if (request.throughMonth() == null) throw new IllegalArgumentException("throughMonth is required"); ContributionPeriod.validate(request.throughMonth()); return outstanding.stream().filter(p -> ContributionPeriod.comparator().compare(p.month, request.throughMonth()) <= 0).map(p -> p.id).toList(); }
     throw new IllegalArgumentException("Unsupported payment selection mode");
-  }
-  private String annualReference(String memberId, int year, String legacyMonth) {
-    if (paymentReferences == null) return "QUY " + legacyMonth.substring(5, 7) + legacyMonth.substring(0, 4);
-    String annual = paymentReferences.referenceForYear(memberId, year);
-    // Mockito/legacy test doubles may not implement annual allocation yet; preserve the old reference fallback.
-    return annual == null || annual.isBlank() ? paymentReferences.referenceFor(memberId, legacyMonth) : annual;
   }
   private boolean initiallyPaid(MemberDocument member, String month) { return member.initiallyPaidMonths != null && member.initiallyPaidMonths.contains(month); }
   private boolean inMemberPlan(MemberDocument member, String period) {
