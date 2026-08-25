@@ -33,7 +33,7 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
 
   @Override public ParsedBankMessage parse(String rawPayload) {
     if (rawPayload == null || rawPayload.isBlank()) throw new IllegalArgumentException("Empty bank message");
-    String raw = readablePayload(rawPayload).replace("&nbsp;", " ").replaceAll("<[^>]*>", " ").replace('|', ' ');
+    String raw = decodeHtmlEntities(readablePayload(rawPayload)).replaceAll("<[^>]*>", " ").replace('|', ' ');
     // Sacombank's bilingual HTML labels can be separated from their value by
     // a line break. Collapse the label pair before applying line-oriented
     // key/value patterns so we never persist "Description" as the content.
@@ -66,6 +66,20 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
   private String match(String raw, Pattern pattern) { Matcher matcher = pattern.matcher(raw); return matcher.find() ? matcher.group(1).trim() : null; }
   private String clean(String value) { return value == null ? null : value.replaceAll("^[\\s/:]+", "").replaceAll("\\s+", " ").trim(); }
   private String digits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
+  private String decodeHtmlEntities(String value) {
+    if (value == null || value.isBlank()) return value;
+    String decoded = value.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
+    Matcher numeric = Pattern.compile("&#(?:x([0-9a-fA-F]+)|([0-9]+));").matcher(decoded);
+    StringBuffer result = new StringBuffer();
+    while (numeric.find()) {
+      try {
+        int codePoint = Integer.parseInt(numeric.group(1) != null ? numeric.group(1) : numeric.group(2), numeric.group(1) != null ? 16 : 10);
+        numeric.appendReplacement(result, Matcher.quoteReplacement(new String(Character.toChars(codePoint))));
+      } catch (RuntimeException ignored) { numeric.appendReplacement(result, Matcher.quoteReplacement(numeric.group())); }
+    }
+    numeric.appendTail(result);
+    return result.toString();
+  }
   private Instant parseTime(String value) {
     if (value == null) return null;
     value = value.replaceFirst("(?i)^(?:date|ngày)\\s*[:/]?\\s*", "");

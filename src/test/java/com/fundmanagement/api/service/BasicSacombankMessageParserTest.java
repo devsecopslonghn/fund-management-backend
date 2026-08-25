@@ -75,4 +75,11 @@ class BasicSacombankMessageParserTest {
     assertThat(result.amount()).isEqualTo(100_000L);
     assertThat(result.direction()).isEqualTo("IN");
   }
+  @Test void decodesHtmlEntitiesBeforeParsingAccountLabel() {
+    var result = parser.parse("Tài khoản&#x2F;*Account*&#x2F; 066007102000\n"
+        + "Phát sinh&#x2F;*Transaction*&#x2F; + 100,000 VND\n"
+        + "Nội dung&#x2F;*Description*&#x2F; EWX619455558 HO NGOC LONG chuyen tien");
+    assertThat(result.accountNumber()).isEqualTo("066007102000");
+    assertThat(result.amount()).isEqualTo(100_000L);
+  }
 }
