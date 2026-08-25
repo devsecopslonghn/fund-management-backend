@@ -62,13 +62,16 @@ public class IngestionService {
   }
   private void applyParsed(BankTransactionDocument tx, SacombankMessageParser.ParsedBankMessage parsed) {
     if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) {
-      log.warn("Bank alert account mismatch actualSuffix={} expectedSuffix={}", accountSuffix(parsed.accountNumber()), accountSuffix(settings.get().accountNumber()));
+      log.warn("Bank alert account mismatch actualSuffix={} actualDigits={} expectedSuffix={} expectedDigits={}",
+          accountSuffix(parsed.accountNumber()), digitCount(parsed.accountNumber()),
+          accountSuffix(settings.get().accountNumber()), digitCount(settings.get().accountNumber()));
       throw new IllegalArgumentException("Bank message was not for the configured receiving account");
     }
     tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.matchMethod = null; tx.conflictReason = null; tx.matchCandidates = new ArrayList<>(); tx.reconciliationStatus = "NEEDS_REVIEW";
   }
   private String normalizeDigits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
   private String accountSuffix(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : digits.substring(Math.max(0, digits.length() - 4)); }
+  private String digitCount(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : Integer.toString(digits.length()); }
 
   /** Claims a transaction atomically before matching, so two replicas cannot allocate it twice. */
   private void tryAutoMatch(BankTransactionDocument candidate) {
