@@ -61,18 +61,28 @@ public class IngestionService {
     catch (IllegalArgumentException ignored) { /* Keep the existing record for admin review. */ }
   }
   private void applyParsed(BankTransactionDocument tx, SacombankMessageParser.ParsedBankMessage parsed) {
-    if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) {
+    String expected = settings.get().accountNumber();
+    boolean accountMatches = sameAccount(parsed.accountNumber(), expected);
+    if (!accountMatches && !rawContainsAccount(tx.rawPayload, expected)) {
       log.warn("Bank alert account mismatch actualPrefix={} actualSuffix={} actualDigits={} expectedPrefix={} expectedSuffix={} expectedDigits={}",
           accountPrefix(parsed.accountNumber()), accountSuffix(parsed.accountNumber()), digitCount(parsed.accountNumber()),
-          accountPrefix(settings.get().accountNumber()), accountSuffix(settings.get().accountNumber()), digitCount(settings.get().accountNumber()));
+          accountPrefix(expected), accountSuffix(expected), digitCount(expected));
       throw new IllegalArgumentException("Bank message was not for the configured receiving account");
     }
-    tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.matchMethod = null; tx.conflictReason = null; tx.matchCandidates = new ArrayList<>(); tx.reconciliationStatus = "NEEDS_REVIEW";
+    if (!accountMatches) log.warn("Bank alert account recovered from normalized payload actualPrefix={} expectedPrefix={}", accountPrefix(parsed.accountNumber()), accountPrefix(expected));
+    tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(accountMatches ? parsed.accountNumber() : expected); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.matchMethod = null; tx.conflictReason = null; tx.matchCandidates = new ArrayList<>(); tx.reconciliationStatus = "NEEDS_REVIEW";
   }
   private String normalizeDigits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
   private String accountSuffix(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : digits.substring(Math.max(0, digits.length() - 4)); }
   private String accountPrefix(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : digits.substring(0, Math.min(2, digits.length())); }
   private String digitCount(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : Integer.toString(digits.length()); }
+  private boolean rawContainsAccount(String rawPayload, String expected) {
+    String wanted = normalizeDigits(expected);
+    if (rawPayload == null || wanted == null) return false;
+    String text = rawPayload.replaceAll("(?s)<[^>]*>", " ").replaceAll("&#x([0-9a-fA-F]+);", " ").replaceAll("&#([0-9]+);", " ");
+    for (String line : text.split("\\R")) if (normalizeDigits(line) != null && normalizeDigits(line).contains(wanted)) return true;
+    return normalizeDigits(text) != null && normalizeDigits(text).contains(wanted);
+  }
 
   /** Claims a transaction atomically before matching, so two replicas cannot allocate it twice. */
   private void tryAutoMatch(BankTransactionDocument candidate) {

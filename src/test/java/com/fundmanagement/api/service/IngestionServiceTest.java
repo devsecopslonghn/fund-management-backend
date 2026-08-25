@@ -35,6 +35,16 @@ class IngestionServiceTest {
     assertThatThrownBy(() -> service.ingest(new ApiDtos.BankTransactionIngestionRequest("provider-wrong", "synthetic wrong receiver"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("configured receiving");
     verify(transactions, never()).insert(any(BankTransactionDocument.class)); verify(transactions, never()).save(any(BankTransactionDocument.class));
   }
+  @Test void recoversConfiguredAccountWhenParserSawAnotherNumericToken() {
+    when(settings.ingestionStatus()).thenReturn(new ApiDtos.IngestionStatusResponse(true, true, false, "synthetic", "test")); when(settings.get()).thenReturn(settings("0661111111")); when(transactions.findByProviderMessageId("provider-recover")).thenReturn(Optional.empty());
+    when(parser.parse("Account marker 0661111111")).thenReturn(new SacombankMessageParser.ParsedBankMessage(Instant.now(), 100_000, "IN", "091234567", "QUY A001 082026", 900_000L));
+    BankTransactionDocument saved = new BankTransactionDocument(); saved.id = "tx-recover";
+    when(transactions.insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>any())).thenAnswer(invocation -> { BankTransactionDocument tx = invocation.getArgument(0); tx.id = saved.id; return tx; });
+    IngestionService service = service();
+    var result = service.ingest(new ApiDtos.BankTransactionIngestionRequest("provider-recover", "Account marker 0661111111"));
+    assertThat(result.reconciliationStatus()).isEqualTo("NEEDS_REVIEW");
+    verify(transactions).insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>argThat(tx -> "0661111111".equals(tx.accountNumber)));
+  }
   @Test void autoMatchesOnlyExactFreshIntentAndUsesProviderIdempotencyKey() {
     Instant created = Instant.parse("2026-08-24T07:30:00Z"); when(settings.ingestionStatus()).thenReturn(new ApiDtos.IngestionStatusResponse(true, true, false, "synthetic", "test")); when(settings.get()).thenReturn(settings("0661111111")); when(transactions.findByProviderMessageId("provider-auto")).thenReturn(Optional.empty());
     when(parser.parse("synthetic accepted")).thenReturn(new SacombankMessageParser.ParsedBankMessage(created.plusSeconds(30), 100_000, "IN", "0661111111", "REF EWX AB12CD34EF BANK", 900_000L));
