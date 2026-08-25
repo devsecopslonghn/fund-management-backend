@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 class BasicSacombankMessageParserTest {
   private final BasicSacombankMessageParser parser = new BasicSacombankMessageParser();
@@ -56,6 +58,23 @@ class BasicSacombankMessageParserTest {
     assertThat(result.amount()).isEqualTo(100_000L);
     assertThat(result.direction()).isEqualTo("IN");
     assertThat(result.parsedContent()).contains("HO NGOC LONG");
+  }
+
+  @Test void parsesVibHtmlTransferUsingDestinationAccountAndVietnameseLabels() {
+    var html = "<table><tr><td>Từ tài khoản</td><td>095045984</td></tr>"
+        + "<tr><td>Đến tài khoản</td><td>066007102000 - HO NGOC LONG</td></tr>"
+        + "<tr><td>Ngày giao dịch</td><td>18:00 18/08/2026</td></tr>"
+        + "<tr><td>Số tiền</td><td>110,000 ₫</td></tr>"
+        + "<tr><td>Diễn giải</td><td>CHUYEN TIEN NHANH QUA QR</td></tr></table>";
+    var raw = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n"
+        + "Content-Transfer-Encoding: base64\r\n\r\n"
+        + Base64.getEncoder().encodeToString(html.getBytes(StandardCharsets.UTF_8));
+    var result = parser.parse(raw);
+    assertThat(result.accountNumber()).isEqualTo("066007102000");
+    assertThat(result.amount()).isEqualTo(110_000L);
+    assertThat(result.direction()).isEqualTo("IN");
+    assertThat(result.parsedContent()).isEqualTo("CHUYEN TIEN NHANH QUA QR");
+    assertThat(result.occurredAt()).isEqualTo(java.time.Instant.parse("2026-08-18T11:00:00Z"));
   }
   @Test void parsesPlainTextBilingualLabelsWithClosingMarkupMarker() {
     var result = parser.parse("Tài khoản/*Account*/ 066007102000\n"
