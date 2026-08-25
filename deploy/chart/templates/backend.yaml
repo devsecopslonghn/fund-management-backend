@@ -52,6 +52,15 @@ spec:
           env:
             - {name: MONGODB_DATABASE, value: fund_management}
             - {name: APP_ALLOWED_ORIGINS, value: https://quybpdev.apps.drgdevlab.com}
+            {{- if .Values.gmailPubsub.enabled }}
+            - {name: FUND_GMAIL_EVENT_ENABLED, value: "true"}
+            - {name: FUND_GMAIL_PUBSUB_TOPIC_NAME, value: {{ .Values.gmailPubsub.topicName | quote }}}
+            - name: FUND_GMAIL_PUBSUB_SHARED_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gmailPubsub.secretName }}
+                  key: token
+            {{- end }}
           ports:
             - {name: http, containerPort: 8080}
           startupProbe:

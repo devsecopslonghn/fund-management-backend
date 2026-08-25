@@ -54,6 +54,7 @@ app:
   gmail:
     enabled: ${FUND_GMAIL_ENABLED:false}
     polling-enabled: ${FUND_GMAIL_POLLING_ENABLED:false}
+    event-enabled: ${FUND_GMAIL_EVENT_ENABLED:false}
     client-id: ${FUND_GMAIL_OAUTH_CLIENT_ID:}
     client-secret: ${FUND_GMAIL_OAUTH_CLIENT_SECRET:}
     redirect-uri: ${FUND_GMAIL_OAUTH_REDIRECT_URI:}
@@ -66,6 +67,9 @@ app:
     # Full mailbox reconciliation fallback. Keep this at one minute for
     # non-QR/manual transfers; deployments can override via the env var.
     batch-poll-interval-ms: ${FUND_GMAIL_BATCH_POLL_INTERVAL_MS:60000}
+    pubsub-topic-name: ${FUND_GMAIL_PUBSUB_TOPIC_NAME:}
+    pubsub-shared-token: ${FUND_GMAIL_PUBSUB_SHARED_TOKEN:}
+    watch-renewal-hours: ${FUND_GMAIL_WATCH_RENEWAL_HOURS:24}
     scheduler-tick-ms: ${FUND_GMAIL_SCHEDULER_TICK_MS:10000}
     fast-poll-interval-ms: ${FUND_GMAIL_FAST_POLL_INTERVAL_MS:5000}
     authorize-endpoint: ${FUND_GMAIL_OAUTH_AUTHORIZE_ENDPOINT:https://accounts.google.com/o/oauth2/v2/auth}

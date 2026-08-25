@@ -8,6 +8,10 @@ image:
 imagePullSecret: nexus-registry
 runtimeSecret: fund-management-runtime
 adminSecret: fund-management-admin
+gmailPubsub:
+  enabled: true
+  topicName: projects/fund-management-prod/topics/fund-management-gmail-events
+  secretName: fund-management-gmail-pubsub
 replicas: 2
 scheduling:
   # Empty by default: the backend may run on any schedulable cluster node.

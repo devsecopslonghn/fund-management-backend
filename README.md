@@ -599,3 +599,21 @@ Operational checks that remain intentionally gated:
 6. An unauthenticated visitor can select any active member from the public payment dashboard, inspect member/month due details, and create a valid QR payment intent; public responses never expose contact details, credentials, OAuth material, raw bank messages or reconciliation internals.
 7. Only an authenticated Admin can create, edit or deactivate members, and every such change is audit-logged.
 8. The system deploys successfully via the CI/CD pipeline to the Kubernetes/VPS environment, with working DB backups and a restore runbook tested at least once.
+
+## Gmail Pub/Sub event path (optional, polling fallback retained)
+
+Set `FUND_GMAIL_EVENT_ENABLED=true`, `FUND_GMAIL_PUBSUB_TOPIC_NAME` to the full
+Google topic name, and inject `FUND_GMAIL_PUBSUB_SHARED_TOKEN` from a Secret.
+After Gmail OAuth is connected, a Super Admin calls
+`POST /api/v1/admin/gmail/pubsub/watch` once. The service stores Gmail's
+`historyId`, renews the watch before expiry, and accepts Pub/Sub pushes at
+`POST /api/v1/integrations/gmail/pubsub?token=<same-secret>`.
+
+The push endpoint validates the secret in constant time, verifies the Gmail
+mailbox, reads `history.list` from the stored cursor, and sends only newly
+added messages through the existing idempotent ingestion service. Pub/Sub
+delivery IDs and provider message IDs are persisted to absorb retries. Keep
+`FUND_GMAIL_POLLING_ENABLED=true` as a recovery path because Gmail push
+notifications can be delayed or dropped. The token URL must be treated as a
+secret; OIDC-authenticated Pub/Sub push is preferred for production and can
+replace the shared-token mode without changing the ingestion contract.

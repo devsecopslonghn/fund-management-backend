@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GmailProperties {
   private boolean enabled;
   private boolean pollingEnabled;
+  private boolean eventEnabled;
   private String clientId = "";
   private String clientSecret = "";
   private String redirectUri = "";
@@ -17,11 +18,15 @@ public class GmailProperties {
   private int leaseDurationSeconds = 900;
   private int intentMatchSeconds = 300;
   private long batchPollIntervalMs = 60000;
+  private String pubsubTopicName = "";
+  private String pubsubSharedToken = "";
+  private int watchRenewalHours = 24;
   private String authorizeEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
   private String tokenEndpoint = "https://oauth2.googleapis.com/token";
   private String apiBaseUrl = "https://gmail.googleapis.com/gmail/v1";
   public boolean isEnabled() { return enabled; } public void setEnabled(boolean value) { enabled = value; }
   public boolean isPollingEnabled() { return pollingEnabled; } public void setPollingEnabled(boolean value) { pollingEnabled = value; }
+  public boolean isEventEnabled() { return eventEnabled; } public void setEventEnabled(boolean value) { eventEnabled = value; }
   public String getClientId() { return clientId; } public void setClientId(String value) { clientId = value; }
   public String getClientSecret() { return clientSecret; } public void setClientSecret(String value) { clientSecret = value; }
   public String getRedirectUri() { return redirectUri; } public void setRedirectUri(String value) { redirectUri = value; }
@@ -32,6 +37,9 @@ public class GmailProperties {
   public int getLeaseDurationSeconds() { return leaseDurationSeconds; } public void setLeaseDurationSeconds(int value) { leaseDurationSeconds = value; }
   public int getIntentMatchSeconds() { return intentMatchSeconds; } public void setIntentMatchSeconds(int value) { intentMatchSeconds = value; }
   public long getBatchPollIntervalMs() { return batchPollIntervalMs; } public void setBatchPollIntervalMs(long value) { batchPollIntervalMs = value; }
+  public String getPubsubTopicName() { return pubsubTopicName; } public void setPubsubTopicName(String value) { pubsubTopicName = value; }
+  public String getPubsubSharedToken() { return pubsubSharedToken; } public void setPubsubSharedToken(String value) { pubsubSharedToken = value; }
+  public int getWatchRenewalHours() { return watchRenewalHours; } public void setWatchRenewalHours(int value) { watchRenewalHours = value; }
   public String getAuthorizeEndpoint() { return authorizeEndpoint; } public void setAuthorizeEndpoint(String value) { authorizeEndpoint = value; }
   public String getTokenEndpoint() { return tokenEndpoint; } public void setTokenEndpoint(String value) { tokenEndpoint = value; }
   public String getApiBaseUrl() { return apiBaseUrl; } public void setApiBaseUrl(String value) { apiBaseUrl = value; }

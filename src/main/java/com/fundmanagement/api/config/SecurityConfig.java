@@ -23,7 +23,7 @@ public class SecurityConfig {
   @Bean
   SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
     return http.csrf(csrf -> csrf.disable()).cors(Customizer.withDefaults()).httpBasic(Customizer.withDefaults())
-        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/api/v1/admin/gmail/oauth/callback", "/api/v1/admin/integrations/gmail/oauth/callback").permitAll().requestMatchers("/api/v1/admin/settings/**", "/api/v1/admin/ingestion/**", "/api/v1/admin/migrations/**", "/api/v1/admin/gmail/**", "/api/v1/admin/integrations/gmail/**").hasRole("SUPER_ADMIN").requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
+        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/public/**", "/api/v1/integrations/gmail/pubsub", "/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/api/v1/admin/gmail/oauth/callback", "/api/v1/admin/integrations/gmail/oauth/callback").permitAll().requestMatchers("/api/v1/admin/settings/**", "/api/v1/admin/ingestion/**", "/api/v1/admin/migrations/**", "/api/v1/admin/gmail/**", "/api/v1/admin/integrations/gmail/**").hasRole("SUPER_ADMIN").requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN").anyRequest().denyAll()).build();
   }
 
   @Bean

@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.HashSet;
 import java.util.stream.Collectors;
 import com.fundmanagement.api.repository.BankTransactionRepository;
@@ -57,8 +59,43 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // scans therefore fetch only provider IDs not already persisted locally.
     Set<String> known = transactions.findByProviderMessageIdIn(candidateIds).stream()
         .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+    return fetchNewMessages(mailbox, token, candidateIds, known);
+  }
+
+  /** Fetches messages added after a Gmail history cursor for Pub/Sub delivery. */
+  public List<MailboxMessage> fetchMessagesSinceHistoryId(String historyId) {
+    if (historyId == null || historyId.isBlank()) throw new IllegalArgumentException("Gmail history cursor is required");
+    String token = oauth.accessToken();
+    String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
+    Set<String> ids = new LinkedHashSet<>();
+    String pageToken = "";
+    do {
+      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/history?startHistoryId=" + URLEncoder.encode(historyId, StandardCharsets.UTF_8)
+          + "&historyTypes=messageAdded&maxResults=100";
+      if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
+      JsonNode history = get(url, token);
+      for (JsonNode record : history.path("history")) {
+        for (JsonNode added : record.path("messagesAdded")) {
+          String id = added.path("message").path("id").asText("");
+          if (!id.isBlank()) ids.add(id);
+        }
+        // Older Gmail responses may expose message ids directly.
+        for (JsonNode message : record.path("messages")) {
+          String id = message.path("id").asText("");
+          if (!id.isBlank()) ids.add(id);
+        }
+      }
+      pageToken = history.path("nextPageToken").asText("");
+    } while (!pageToken.isBlank());
+    if (ids.isEmpty()) return List.of();
+    Set<String> known = transactions.findByProviderMessageIdIn(ids).stream()
+        .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+    return fetchNewMessages(mailbox, token, ids, known);
+  }
+
+  private List<MailboxMessage> fetchNewMessages(String mailbox, String token, Collection<String> ids, Set<String> known) {
     List<MailboxMessage> messages = new ArrayList<>();
-    for (String id : candidateIds) if (!known.contains(id)) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
+    for (String id : ids) if (!known.contains(id)) messages.add(new MailboxMessage(id, rawMessage(mailbox, id, token)));
     return messages;
   }
   static String gmailSearchQuery(String accountNumber) {
