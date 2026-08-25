@@ -48,7 +48,18 @@ public class GmailPollingWorker {
       log.info("Gmail poll fetched {} candidate bank alert(s)", messages.size());
       for (MailboxIngestionPort.MailboxMessage message : messages) {
         try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); }
-        catch (RuntimeException failure) { log.warn("Gmail bank alert ingestion failed: {}", failure.getMessage()); }
+        catch (RuntimeException failure) {
+          if ("Bank message was not for the configured receiving account".equals(failure.getMessage())) {
+            String payload = message.rawPayload() == null ? "" : message.rawPayload();
+            String configured = settings == null ? "" : settings.get().accountNumber();
+            String digits = configured == null ? "" : configured.replaceAll("\\D", "");
+            log.warn("Gmail bank alert account rejected payloadLength={} hasConfiguredAccount={} hasAccountLabel={} hasTableMarker={} hasHtmlEntity={}",
+                payload.length(), !digits.isBlank() && payload.contains(digits),
+                payload.toLowerCase(java.util.Locale.ROOT).contains("account") || payload.toLowerCase(java.util.Locale.ROOT).contains("tài khoản"),
+                payload.contains("|"), payload.contains("&#"));
+          }
+          log.warn("Gmail bank alert ingestion failed: {}", failure.getMessage());
+        }
       }
     } catch (RuntimeException failure) { log.warn("Gmail poll failed: {}", failure.getMessage()); }
     finally { try { leaseService.release(acquired.get()); } catch (RuntimeException ignored) { /* TTL expiry remains the fallback. */ } }
