@@ -45,4 +45,16 @@ class BasicSacombankMessageParserTest {
     assertThat(result.parsedContent()).contains("EWX615212750");
     assertThat(result.availableBalance()).isEqualTo(198_000L);
   }
+  @Test void parsesPlainTextBilingualLabelsWithEmphasisMarkers() {
+    var raw = "Tài khoản/*Account*\n066007102000\n"
+        + "Ngày/*Date*\n25/08/2026 17:52\n"
+        + "Phát sinh/*Transaction*\n+ 100,000 VND\n"
+        + "Số dư khả dụng/*Available balance*\n1,198,000 VND\n"
+        + "Nội dung/*Description*\nEWX619455558 HO NGOC LONG chuyen tien\n";
+    var result = parser.parse(raw);
+    assertThat(result.accountNumber()).isEqualTo("066007102000");
+    assertThat(result.amount()).isEqualTo(100_000L);
+    assertThat(result.direction()).isEqualTo("IN");
+    assertThat(result.parsedContent()).contains("HO NGOC LONG");
+  }
 }

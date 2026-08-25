@@ -26,10 +26,13 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class IngestionService {
+  private static final Logger log = LoggerFactory.getLogger(IngestionService.class);
   private final BankTransactionRepository transactions; private final SacombankMessageParser parser; private final SettingsService settings; private final PaymentIntentRepository intents; private final PaymentService payments; private final AuditService audit; private final GmailProperties gmail; private final MongoTemplate mongo; private final PaymentReferenceRepository references; private final MemberRepository members;
   public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings) { this(transactions, parser, settings, null, null, null, null, null, null, null); }
   /** Compatibility constructor retained for focused tests that predate annual references. */
@@ -58,10 +61,14 @@ public class IngestionService {
     catch (IllegalArgumentException ignored) { /* Keep the existing record for admin review. */ }
   }
   private void applyParsed(BankTransactionDocument tx, SacombankMessageParser.ParsedBankMessage parsed) {
-    if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) throw new IllegalArgumentException("Bank message was not for the configured receiving account");
+    if (!sameAccount(parsed.accountNumber(), settings.get().accountNumber())) {
+      log.warn("Bank alert account mismatch actualSuffix={} expectedSuffix={}", accountSuffix(parsed.accountNumber()), accountSuffix(settings.get().accountNumber()));
+      throw new IllegalArgumentException("Bank message was not for the configured receiving account");
+    }
     tx.occurredAt = parsed.occurredAt(); tx.amount = parsed.amount(); tx.direction = parsed.direction(); tx.accountNumber = normalizeDigits(parsed.accountNumber()); tx.parsedContent = parsed.parsedContent(); tx.availableBalance = parsed.availableBalance(); tx.matchMethod = null; tx.conflictReason = null; tx.matchCandidates = new ArrayList<>(); tx.reconciliationStatus = "NEEDS_REVIEW";
   }
   private String normalizeDigits(String value) { if (value == null) return null; String result = value.replaceAll("\\D", ""); return result.isBlank() ? null : result; }
+  private String accountSuffix(String value) { String digits = normalizeDigits(value); return digits == null ? "none" : digits.substring(Math.max(0, digits.length() - 4)); }
 
   /** Claims a transaction atomically before matching, so two replicas cannot allocate it twice. */
   private void tryAutoMatch(BankTransactionDocument candidate) {
