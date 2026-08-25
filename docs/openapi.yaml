@@ -31,6 +31,13 @@ paths:
         '200':
           description: Detailed payment dashboard
           content: { application/json: { schema: { $ref: '#/components/schemas/PublicPaymentDashboard' } } }
+  /public/expenses:
+    get:
+      tags: [Public]
+      operationId: getPublicExpenses
+      parameters: [{ name: from, in: query, schema: { type: string, format: date } }, { name: to, in: query, schema: { type: string, format: date } }, { name: category, in: query, schema: { type: string, maxLength: 64 } }]
+      description: Read-only transparency projection for recorded expenses. It excludes internal IDs, requester, notes, audit data and admin metadata.
+      responses: { '200': { description: Public expense rows, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/PublicExpense' } } } } } }
   /public/contribution-board:
     get:
       tags: [Public]
@@ -452,6 +459,7 @@ components:
     ManualPayment: { type: object, properties: { id: { type: string }, memberId: { type: string }, amount: { type: integer, format: int64 }, unallocatedAmount: { type: integer, format: int64 }, allocations: { type: array, items: { type: object, properties: { duePeriodId: { type: string }, amount: { type: integer, format: int64 } } } } } }
     ExpenseRequest: { type: object, required: [date, amount, purpose], properties: { date: { type: string, format: date }, amount: { type: integer, format: int64, minimum: 1 }, purpose: { type: string, maxLength: 500 }, category: { type: string, maxLength: 64 }, requestedBy: { type: string, maxLength: 120 }, notes: { type: string, maxLength: 1000 } } }
     Expense: { allOf: [{ $ref: '#/components/schemas/ExpenseRequest' }, { type: object, properties: { id: { type: string }, createdAt: { type: string, format: date-time }, updatedAt: { type: string, format: date-time } } }] }
+    PublicExpense: { type: object, required: [date, amount, purpose], properties: { date: { type: string, format: date }, amount: { type: integer, format: int64 }, purpose: { type: string }, category: { type: string, nullable: true } } }
     Dashboard: { type: object, properties: { balance: { type: integer, format: int64 }, totalIncome: { type: integer, format: int64 }, totalExpense: { type: integer, format: int64 }, currentMonthCompliancePercent: { type: integer }, reviewCount: { type: integer, description: Always zero in Phase 1 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, latePayers: { type: array, items: { $ref: '#/components/schemas/Member' } } } }
     MonthlySeries: { type: object, properties: { month: { type: string }, income: { type: integer, format: int64 }, expense: { type: integer, format: int64 } } }
     PersonalLinkRequest: { type: object, required: [email], properties: { email: { type: string, format: email } } }

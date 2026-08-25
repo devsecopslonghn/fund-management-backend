@@ -3,6 +3,8 @@ package com.fundmanagement.api.controller;
 import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.service.DashboardService;
 import com.fundmanagement.api.service.DuesService;
+import com.fundmanagement.api.service.ExpenseService;
+import java.time.LocalDate;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,9 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/public")
 public class PublicController {
-  private final DashboardService dashboard; private final DuesService dues;
-  public PublicController(DashboardService dashboard, DuesService dues) { this.dashboard = dashboard; this.dues = dues; }
+  private final DashboardService dashboard; private final DuesService dues; private final ExpenseService expenses;
+  public PublicController(DashboardService dashboard, DuesService dues, ExpenseService expenses) { this.dashboard = dashboard; this.dues = dues; this.expenses = expenses; }
   @GetMapping("/overview") public ApiDtos.PublicOverviewResponse overview() { return dashboard.publicOverview(); }
+  /** Public transparency projection: no internal ID, requester, notes, audit or admin metadata. */
+  @GetMapping("/expenses") public java.util.List<ApiDtos.PublicExpenseResponse> expenses(@RequestParam(required = false) LocalDate from, @RequestParam(required = false) LocalDate to, @RequestParam(required = false) String category) { return expenses.publicList(from, to, category); }
   @GetMapping("/payment-dashboard") public ApiDtos.PublicPaymentDashboardResponse paymentDashboard(@RequestParam(required = false) Integer year) { return year == null ? dashboard.publicPaymentDashboard() : dashboard.publicPaymentDashboard(year); }
   @GetMapping("/contribution-board") public ApiDtos.PublicContributionBoardResponse contributionBoard(@RequestParam int year) { return dashboard.publicContributionBoard(year); }
   /** Name lookup returns only payable due periods. It never returns contact details or payment history. */

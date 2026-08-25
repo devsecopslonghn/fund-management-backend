@@ -58,6 +58,7 @@ public final class ApiDtos {
   public record PaymentReversalResponse(String paymentId, String memberId, long amount, Instant reversedAt, String reason) {}
   public record ExpenseRequest(@NotNull LocalDate date, @Min(1) long amount, @NotBlank @Size(max = 500) String purpose, @Size(max = 64) String category, @Size(max = 120) String requestedBy, @Size(max = 1000) String notes) {}
   public record ExpenseResponse(String id, LocalDate date, long amount, String purpose, String category, String requestedBy, String notes, Instant createdAt, Instant updatedAt) {}
+  public record PublicExpenseResponse(LocalDate date, long amount, String purpose, String category) {}
   public record PublicMemberStatus(String name, String status) {}
   public record MonthlySeriesResponse(String month, long income, long expense) {}
   public record PublicOverviewResponse(long balance, long incomeThisMonth, long expenseThisMonth, int currentMonthCompliancePercent, List<MonthlySeriesResponse> monthlySeries, List<PublicMemberStatus> members) {}

@@ -12,6 +12,7 @@ import com.fundmanagement.api.dto.ApiDtos;
 import com.fundmanagement.api.domain.IntentStatus;
 import com.fundmanagement.api.service.DashboardService;
 import com.fundmanagement.api.service.DuesService;
+import com.fundmanagement.api.service.ExpenseService;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,12 @@ class PublicPaymentSecurityTest {
   @Autowired MockMvc mvc;
   @MockitoBean DashboardService dashboard;
   @MockitoBean DuesService dues;
+  @MockitoBean ExpenseService expenses;
+
+  @Test void publicExpensesExposeOnlyTransparencyFieldsWithoutAuthentication() throws Exception {
+    when(expenses.publicList(null, null, null)).thenReturn(List.of(new ApiDtos.PublicExpenseResponse(java.time.LocalDate.of(2026, 8, 25), 100_000, "Mua nước", "Sinh hoạt")));
+    mvc.perform(get("/api/v1/public/expenses")).andExpect(status().isOk()).andExpect(jsonPath("$[0].amount").value(100_000)).andExpect(jsonPath("$[0].purpose").value("Mua nước")).andExpect(jsonPath("$[0].id").doesNotExist()).andExpect(jsonPath("$[0].requestedBy").doesNotExist()).andExpect(jsonPath("$[0].notes").doesNotExist());
+  }
 
   @Test void anonymousPayerCanLookupByNameWithoutAuthentication() throws Exception {
     when(dues.publicPaymentOptions(any())).thenReturn(new ApiDtos.PublicPaymentOptionsResponse(false, List.of(new ApiDtos.PublicMemberMatch("Nguyễn Văn A", null)), List.of(new ApiDtos.PublicDuePeriodResponse("due-1", "2026-08", 100_000))));
