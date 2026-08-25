@@ -2,7 +2,7 @@
 # an immutable image tag into this application repository.
 image:
   repository: nexus.apps.drgdevlab.com/fund-management/backend
-  tag: gmail-thread-process-20260825-2024
+  tag: gmail-diagnostic-20260825-2028
   pullPolicy: IfNotPresent
 
 imagePullSecret: nexus-registry
