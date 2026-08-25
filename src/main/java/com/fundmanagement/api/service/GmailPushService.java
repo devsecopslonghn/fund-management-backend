@@ -121,7 +121,14 @@ public class GmailPushService {
       if (compare(historyId, state.historyId) > 0) {
         List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchMessagesSinceHistoryId(state.historyId);
         for (MailboxIngestionPort.MailboxMessage candidate : messages) {
-          ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(candidate.providerMessageId(), candidate.rawPayload()));
+          try {
+            ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(candidate.providerMessageId(), candidate.rawPayload()));
+          } catch (IllegalArgumentException failure) {
+            // Gmail history can contain outgoing alerts from the same mailbox.
+            // They are not an event-processing failure and must not keep the
+            // same Pub/Sub notification in retry forever.
+            if (!"Bank message was not for the configured receiving account".equals(failure.getMessage())) throw failure;
+          }
         }
         if (compare(historyId, state.historyId) > 0) state.historyId = historyId;
         state.lastNotificationAt = Instant.now(); watches.save(state);

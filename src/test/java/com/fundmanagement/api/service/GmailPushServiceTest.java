@@ -47,6 +47,25 @@ class GmailPushServiceTest {
     assertThat(state.historyId).isEqualTo("101");
   }
 
+  @Test void outgoingMailboxAlertDoesNotBlockHistoryCursor() throws Exception {
+    GmailProperties properties = properties();
+    GmailWatchStateDocument state = new GmailWatchStateDocument(); state.id = "singleton"; state.historyId = "100"; state.mailbox = "fund@example.test";
+    GmailCredentialDocument credential = new GmailCredentialDocument(); credential.id = "singleton"; credential.mailbox = "fund@example.test";
+    when(watches.findById("singleton")).thenReturn(Optional.of(state));
+    when(credentials.findById("singleton")).thenReturn(Optional.of(credential));
+    when(events.findById("pubsub-2")).thenReturn(Optional.empty());
+    when(mailbox.fetchMessagesSinceHistoryId("100")).thenReturn(java.util.List.of(
+        new MailboxIngestionPort.MailboxMessage("gmail-out", "outgoing"),
+        new MailboxIngestionPort.MailboxMessage("gmail-in", "incoming")));
+    doAnswer(invocation -> { ((GmailPushEventDocument) invocation.getArgument(0)).status = "COMPLETED"; return invocation.getArgument(0); }).when(events).save(any());
+    doThrow(new IllegalArgumentException("Bank message was not for the configured receiving account"))
+        .when(ingestion).ingest(argThat(request -> "gmail-out".equals(request.providerMessageId())));
+    GmailPushService service = new GmailPushService(properties, mailbox, oauth, watches, events, credentials, ingestion, new ObjectMapper());
+    service.process(new ObjectMapper().readTree(envelope("pubsub-2", "fund@example.test", "101")));
+    verify(ingestion, times(2)).ingest(any());
+    assertThat(state.historyId).isEqualTo("101");
+  }
+
   private GmailPushEventDocument completed(String id) { GmailPushEventDocument event = new GmailPushEventDocument(); event.id = id; event.status = "COMPLETED"; return event; }
   private GmailProperties properties() { GmailProperties properties = new GmailProperties(); properties.setEnabled(true); properties.setEventEnabled(true); properties.setMonitoredMailbox("fund@example.test"); properties.setPubsubTopicName("projects/test/topics/gmail"); return properties; }
   private String envelope(String id, String email, String historyId) {
