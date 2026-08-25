@@ -66,4 +66,13 @@ class BasicSacombankMessageParserTest {
     assertThat(result.amount()).isEqualTo(100_000L);
     assertThat(result.direction()).isEqualTo("IN");
   }
+  @Test void parsesSacombankMarkdownTableVariant() {
+    var result = parser.parse("| Tài khoản/*Account* | 066007102000 |\n"
+        + "| Ngày/*Date* | 25/08/2026 17:52 |\n"
+        + "| Phát sinh/*Transaction* | + 100,000 VND |\n"
+        + "| Nội dung/*Description* | EWX619455558 HO NGOC LONG chuyen tien |");
+    assertThat(result.accountNumber()).isEqualTo("066007102000");
+    assertThat(result.amount()).isEqualTo(100_000L);
+    assertThat(result.direction()).isEqualTo("IN");
+  }
 }

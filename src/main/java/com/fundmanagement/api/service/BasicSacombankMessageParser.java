@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
 /** Conservative parser for redacted key/value and Sacombank bilingual alert variants. */
 @Component
 public class BasicSacombankMessageParser implements SacombankMessageParser {
-  private static final Pattern ACCOUNT = Pattern.compile("(?:account(?:\\s*(?:number|no\\.?))?|tài khoản|so tk)\\s*[:=]?\\s*([0-9][0-9 .-]{5,30})", Pattern.CASE_INSENSITIVE);
+  private static final Pattern ACCOUNT = Pattern.compile("(?:account(?:\\s*(?:number|no\\.?))?|tài khoản|so tk)\\s*[:=|]?\\s*([0-9][0-9 .-]{9,30})", Pattern.CASE_INSENSITIVE);
   private static final Pattern LABELED_AMOUNT = Pattern.compile("(?:amount|số tiền|transaction amount)\\s*[:=]?\\s*([+-]?)\\s*([0-9][0-9.,]*)", Pattern.CASE_INSENSITIVE);
   private static final Pattern SIGNED_AMOUNT = Pattern.compile("([+-])\\s*([0-9][0-9.,]*)\\s*(?:VND|đ)", Pattern.CASE_INSENSITIVE);
   private static final Pattern CONTENT = Pattern.compile("(?:content|nội dung|description)\\s*[:=]?\\s*([^\\r\\n<;]{1,500})", Pattern.CASE_INSENSITIVE);
@@ -33,7 +33,7 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
 
   @Override public ParsedBankMessage parse(String rawPayload) {
     if (rawPayload == null || rawPayload.isBlank()) throw new IllegalArgumentException("Empty bank message");
-    String raw = readablePayload(rawPayload).replace("&nbsp;", " ").replaceAll("<[^>]*>", " ");
+    String raw = readablePayload(rawPayload).replace("&nbsp;", " ").replaceAll("<[^>]*>", " ").replace('|', ' ');
     // Sacombank's bilingual HTML labels can be separated from their value by
     // a line break. Collapse the label pair before applying line-oriented
     // key/value patterns so we never persist "Description" as the content.
