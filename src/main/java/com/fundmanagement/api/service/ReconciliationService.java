@@ -23,6 +23,17 @@ public class ReconciliationService {
     if (member.email != null && !member.email.isBlank()) notifications.send(member.id, "confirmation", new NotificationSender.NotificationMessage(member.email, "Fund payment recorded", "Your fund payment has been recorded.", "confirmation:" + tx.providerMessageId));
     return ingestion.response(tx);
   }
+  public ApiDtos.BankTransactionResponse restore(String id, ApiDtos.ReconciliationRestoreRequest request, String actor) {
+    BankTransactionDocument tx = transactions.findById(id).orElseThrow(() -> new IllegalArgumentException("Bank transaction not found"));
+    if (!"IGNORED".equals(tx.reconciliationStatus)) throw new IllegalStateException("Only ignored transactions can be restored");
+    if ((tx.matchedDuePeriodIds != null && !tx.matchedDuePeriodIds.isEmpty()) || (tx.matchedMemberId != null && !tx.matchedMemberId.isBlank())) throw new IllegalStateException("A transaction with payment allocation cannot be restored");
+    tx.reconciliationStatus = "NEEDS_REVIEW";
+    tx.reviewedBy = null;
+    tx.reviewedAt = null;
+    transactions.save(tx);
+    audit.record(actor, "BANK_TRANSACTION_REOPENED", "bank_transaction", id, Map.of("status", "IGNORED"), Map.of("status", "NEEDS_REVIEW", "reason", request.reason()));
+    return ingestion.response(tx);
+  }
   public ApiDtos.BankTransactionResponse reverse(String id, ApiDtos.PaymentReversalRequest request, String actor) {
     BankTransactionDocument tx = transactions.findById(id).orElseThrow(() -> new IllegalArgumentException("Bank transaction not found"));
     if (!"MATCHED".equals(tx.reconciliationStatus)) throw new IllegalStateException("Only a matched bank transaction can be reversed");
