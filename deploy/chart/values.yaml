@@ -2,7 +2,7 @@
 # an immutable image tag into this application repository.
 image:
   repository: nexus.apps.drgdevlab.com/fund-management/backend
-  tag: gmail-parser-diag-20260825-1936
+  tag: gmail-event-fix-20260825-1942
   pullPolicy: IfNotPresent
 
 imagePullSecret: nexus-registry
