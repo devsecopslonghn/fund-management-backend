@@ -349,6 +349,14 @@ paths:
       operationId: registerGmailPubSubWatch
       description: SUPER_ADMIN only. Registers or renews Gmail users.watch and stores the history cursor. Requires Pub/Sub topic configuration.
       responses: { '200': { description: Watch registration state, content: { application/json: { schema: { $ref: '#/components/schemas/GmailWatchState' } } } }
+  /admin/gmail/pubsub/diagnostic-messages:
+    get:
+      tags: [Admin]
+      security: [{ basicAuth: [] }]
+      operationId: diagnoseGmailThread
+      description: SUPER_ADMIN only. Reads one Gmail message or thread with the existing gmail.readonly OAuth credential. Returns redacted MIME metadata and parser output only; never returns raw MIME, OAuth material, or writes ledger data.
+      parameters: [{ name: messageId, in: query, required: false, schema: { type: string, maxLength: 255 } }, { name: threadId, in: query, required: false, schema: { type: string, maxLength: 255 } }]
+      responses: { '200': { description: Redacted messages in one Gmail thread, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/GmailDiagnosticMessage' } } } } }, '400': { description: Exactly one messageId or threadId is required } }
   /integrations/gmail/pubsub:
     post:
       tags: [Integration]
@@ -465,5 +473,7 @@ components:
     GmailOAuthCallback: { type: object, properties: { connected: { type: boolean }, message: { type: string } } }
     GmailOAuthStatus: { type: object, description: Never contains client secret, access token, refresh token, or state., properties: { configured: { type: boolean }, connected: { type: boolean }, monitoredMailbox: { type: string }, senderFilter: { type: string }, connectedAt: { type: string, format: date-time, nullable: true }, mode: { type: string, enum: [disabled, gmail-read-only] } } }
     GmailWatchState: { type: object, properties: { topicName: { type: string }, historyId: { type: string }, expirationAt: { type: string, format: date-time } } }
+    GmailDiagnosticMessage: { type: object, description: Redacted diagnostic projection; rawPayload is never returned., properties: { messageId: { type: string }, threadId: { type: string }, gmailInternalDate: { type: string, format: date-time, nullable: true }, mimeDate: { type: string, format: date-time, nullable: true }, rawLength: { type: integer }, mimeParts: { type: array, items: { $ref: '#/components/schemas/GmailMimePart' } }, parserError: { type: string, nullable: true }, parsedAccountDigits: { type: integer }, parsedAccountMasked: { type: string, nullable: true }, parsedAccountMatchesConfigured: { type: boolean }, parsedAmount: { type: integer, format: int64, nullable: true }, parsedDirection: { type: string, nullable: true, enum: [IN, OUT] }, parsedContent: { type: string, nullable: true } } }
+    GmailMimePart: { type: object, properties: { path: { type: string }, contentType: { type: string, nullable: true }, charset: { type: string, nullable: true }, transferEncoding: { type: string, nullable: true }, disposition: { type: string, nullable: true }, declaredSize: { type: integer } } }
     AuditLogPage: { type: object, properties: { content: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 } } }
     AuditLog: { type: object, properties: { id: { type: string }, actor: { type: string }, action: { type: string }, entityType: { type: string }, entityId: { type: string }, before: { type: object }, after: { type: object }, timestamp: { type: string, format: date-time } } }

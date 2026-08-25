@@ -10,14 +10,26 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.stream.Collectors;
 import com.fundmanagement.api.repository.BankTransactionRepository;
+import jakarta.mail.Multipart;
+import jakarta.mail.Part;
+import jakarta.mail.Session;
+import jakarta.mail.MessagingException;
+import jakarta.mail.internet.MimeMessage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.Properties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -27,6 +39,142 @@ import org.springframework.stereotype.Component;
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions; private final SacombankMessageParser parser;
   public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions, SacombankMessageParser parser) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.parser = parser; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
+
+  /**
+   * Read-only diagnostic for one Gmail thread. It deliberately does not return
+   * raw MIME, persist anything, or call the ingestion/reconciliation flow.
+   */
+  public List<GmailDiagnosticMessage> diagnosticMessages(String requestedMessageId, String requestedThreadId) {
+    boolean hasMessage = requestedMessageId != null && !requestedMessageId.isBlank();
+    boolean hasThread = requestedThreadId != null && !requestedThreadId.isBlank();
+    if (hasMessage == hasThread) throw new IllegalArgumentException("Exactly one Gmail messageId or threadId is required");
+    String token = oauth.accessToken();
+    String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
+    String threadId = hasThread ? providerId(requestedThreadId) : "";
+    Map<String, GmailMessageMetadata> metadata = new LinkedHashMap<>();
+    if (hasMessage) {
+      String messageId = providerId(requestedMessageId);
+      JsonNode message = get(messageUrl(mailbox, messageId, "minimal"), token);
+      threadId = providerId(message.path("threadId").asText(""));
+      metadata.put(messageId, metadata(message, threadId));
+    }
+    if (threadId.isBlank()) throw new IllegalArgumentException("Gmail message did not contain a threadId");
+    JsonNode thread = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/threads/" +
+        URLEncoder.encode(threadId, StandardCharsets.UTF_8) + "?format=minimal", token);
+    for (JsonNode message : thread.path("messages")) {
+      String messageId = message.path("id").asText("");
+      if (!messageId.isBlank()) metadata.put(messageId, metadata(message, threadId));
+    }
+    if (metadata.isEmpty()) throw new IllegalArgumentException("Gmail thread did not contain messages");
+    if (hasMessage && !metadata.containsKey(providerId(requestedMessageId))) {
+      throw new IllegalArgumentException("Gmail message was not found in the requested thread");
+    }
+    String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
+    List<GmailDiagnosticMessage> result = new ArrayList<>();
+    for (Map.Entry<String, GmailMessageMetadata> entry : metadata.entrySet()) {
+      byte[] rawBytes = rawMessageBytes(mailbox, entry.getKey(), token);
+      result.add(diagnose(entry.getKey(), entry.getValue(), rawBytes, expectedAccount));
+    }
+    return result;
+  }
+
+  public record GmailDiagnosticMessage(String messageId, String threadId, Instant gmailInternalDate,
+      Instant mimeDate, int rawLength, List<GmailMimePart> mimeParts, String parserError,
+      int parsedAccountDigits, String parsedAccountMasked, boolean parsedAccountMatchesConfigured,
+      Long parsedAmount, String parsedDirection, String parsedContent) {}
+
+  public record GmailMimePart(String path, String contentType, String charset,
+      String transferEncoding, String disposition, int declaredSize) {}
+
+  private record GmailMessageMetadata(String threadId, Instant gmailInternalDate) {}
+
+  private GmailDiagnosticMessage diagnose(String messageId, GmailMessageMetadata metadata, byte[] rawBytes, String expectedAccount) {
+    MimeMessage mime = null;
+    List<GmailMimePart> parts = new ArrayList<>();
+    Instant mimeDate = null;
+    String mimeError = null;
+    try {
+      mime = new MimeMessage(Session.getInstance(new Properties()), new ByteArrayInputStream(rawBytes));
+      Date sentDate = mime.getSentDate();
+      mimeDate = sentDate == null ? null : sentDate.toInstant();
+      inspectMimePart(mime, "1", parts);
+    } catch (MessagingException | IOException error) {
+      mimeError = error.getClass().getSimpleName();
+    }
+    SacombankMessageParser.ParsedBankMessage parsed = null;
+    String parserError = null;
+    try {
+      parsed = parser.parse(new String(rawBytes, StandardCharsets.UTF_8));
+    } catch (RuntimeException error) {
+      parserError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+    }
+    if (mimeError != null && parserError == null) parserError = "MIME: " + mimeError;
+    String account = parsed == null ? null : parsed.accountNumber();
+    String digits = account == null ? "" : account.replaceAll("\\D", "");
+    String parsedContent = parsed == null ? null : redact(parsed.parsedContent(), expectedAccount, digits);
+    return new GmailDiagnosticMessage(messageId, metadata.threadId(), metadata.gmailInternalDate(), mimeDate,
+        rawBytes.length, List.copyOf(parts), parserError, digits.length(), maskAccount(digits),
+        !digits.isBlank() && digits.equals(expectedAccount), parsed == null ? null : parsed.amount(),
+        parsed == null ? null : parsed.direction(), parsedContent);
+  }
+
+  private void inspectMimePart(Part part, String path, List<GmailMimePart> parts) throws MessagingException, IOException {
+    Object content = part.getContent();
+    if (content instanceof Multipart multipart) {
+      for (int index = 0; index < multipart.getCount(); index++) {
+        inspectMimePart(multipart.getBodyPart(index), path + "." + (index + 1), parts);
+      }
+      return;
+    }
+    String contentType = part.getContentType();
+    parts.add(new GmailMimePart(path, baseContentType(contentType), parameter(contentType, "charset"),
+        firstHeader(part, "Content-Transfer-Encoding"), firstHeader(part, "Content-Disposition"),
+        Math.max(0, part.getSize())));
+  }
+
+  private String baseContentType(String contentType) {
+    if (contentType == null) return null;
+    int separator = contentType.indexOf(';');
+    return (separator < 0 ? contentType : contentType.substring(0, separator)).trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private String parameter(String contentType, String name) {
+    if (contentType == null) return null;
+    java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?i)(?:^|;)\\s*" + name + "\\s*=\\s*(?:\\\"([^\\\"]+)\\\"|([^;\\s]+))").matcher(contentType);
+    return matcher.find() ? (matcher.group(1) == null ? matcher.group(2) : matcher.group(1)) : null;
+  }
+
+  private String firstHeader(Part part, String name) throws MessagingException {
+    String[] values = part.getHeader(name);
+    return values == null || values.length == 0 ? null : values[0];
+  }
+
+  private String redact(String value, String expectedAccount, String parsedAccount) {
+    if (value == null) return null;
+    String result = value;
+    for (String account : List.of(expectedAccount, parsedAccount)) {
+      if (account != null && account.length() >= 8) result = result.replace(account, maskAccount(account));
+    }
+    return result.replaceAll("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", "[email-redacted]")
+        .replaceAll("(?<!\\d)\\d[\\d .-]{7,}\\d(?!\\d)", "[account-redacted]");
+  }
+
+  private String maskAccount(String digits) {
+    if (digits == null || digits.isBlank()) return null;
+    return digits.substring(0, Math.min(2, digits.length())) + "…" + digits.substring(Math.max(0, digits.length() - 4));
+  }
+
+  private GmailMessageMetadata metadata(JsonNode message, String fallbackThreadId) {
+    String threadId = message.path("threadId").asText(fallbackThreadId);
+    String internalDate = message.path("internalDate").asText("");
+    Instant timestamp = internalDate.isBlank() ? null : Instant.ofEpochMilli(Long.parseLong(internalDate));
+    return new GmailMessageMetadata(threadId, timestamp);
+  }
+
+  private String providerId(String value) {
+    if (value == null || !value.matches("[A-Za-z0-9_-]{1,255}")) throw new IllegalArgumentException("Gmail provider identifier is invalid");
+    return value;
+  }
 
   /**
    * Reads every message matching the configured receiving account.
@@ -118,6 +266,18 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // receiving account. There is intentionally no unread/state predicate.
     return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn) \"" + digits + "\"";
   }
-  private String rawMessage(String mailbox, String id, String token) { JsonNode body = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=raw", token); String raw = body.path("raw").asText(""); if (raw.isBlank()) throw new IllegalStateException("Gmail message payload was empty"); try { return new String(Base64.getUrlDecoder().decode(raw), StandardCharsets.UTF_8); } catch (IllegalArgumentException ex) { throw new IllegalStateException("Gmail message payload was invalid"); } }
+  private String messageUrl(String mailbox, String id, String format) {
+    return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
+  }
+  private byte[] rawMessageBytes(String mailbox, String id, String token) {
+    JsonNode body = get(messageUrl(mailbox, id, "raw"), token);
+    String raw = body.path("raw").asText("");
+    if (raw.isBlank()) throw new IllegalStateException("Gmail message payload was empty");
+    try { return Base64.getUrlDecoder().decode(raw); }
+    catch (IllegalArgumentException ex) { throw new IllegalStateException("Gmail message payload was invalid"); }
+  }
+  private String rawMessage(String mailbox, String id, String token) {
+    return new String(rawMessageBytes(mailbox, id, token), StandardCharsets.UTF_8);
+  }
   private JsonNode get(String url, String token) { try { HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail API request failed"); return mapper.readTree(response.body()); } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail API request failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail API request interrupted", ex); } }
 }
