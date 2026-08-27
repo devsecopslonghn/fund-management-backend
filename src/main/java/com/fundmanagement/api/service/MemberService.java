@@ -191,12 +191,31 @@ public class MemberService {
 
     List<ContributionRate> ordered = new ArrayList<>(byStart.values());
     ordered.sort(Comparator.comparing(rate -> rate.effectiveFrom));
-    for (int index = 0; index < ordered.size(); index++) {
-      ContributionRate current = ordered.get(index);
-      current.effectiveTo = index + 1 < ordered.size()
-          ? YearMonth.parse(ordered.get(index + 1).effectiveFrom).minusMonths(1).toString() : null;
+    // The form edits the current rate boundary, rather than creating a new
+    // rate every time the same amount is saved. This also fixes a boundary
+    // moved from August to September after the first save already created the
+    // August entry.
+    List<ContributionRate> normalized = new ArrayList<>();
+    for (ContributionRate current : ordered) {
+      ContributionRate previous = normalized.isEmpty() ? null : normalized.get(normalized.size() - 1);
+      if (previous != null && previous.amount == current.amount) {
+        if (member.baselineMonth.equals(previous.effectiveFrom)) {
+          continue;
+        }
+        if (effectiveFrom.equals(current.effectiveFrom)) {
+          normalized.remove(normalized.size() - 1);
+        } else {
+          continue;
+        }
+      }
+      normalized.add(current);
     }
-    member.contributionRates = ordered;
+    for (int index = 0; index < normalized.size(); index++) {
+      ContributionRate current = normalized.get(index);
+      current.effectiveTo = index + 1 < normalized.size()
+          ? YearMonth.parse(normalized.get(index + 1).effectiveFrom).minusMonths(1).toString() : null;
+    }
+    member.contributionRates = normalized;
   }
 
   private List<ContributionRate> rates(MemberDocument member) {

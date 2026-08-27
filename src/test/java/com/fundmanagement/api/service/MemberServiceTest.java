@@ -54,6 +54,28 @@ class MemberServiceTest {
     assertThat(service.rateFor(member, "2026-07")).isEqualTo(200_000L);
   }
 
+  @Test
+  void movingSameRateBoundaryReplacesThePreviousBoundary() {
+    MemberDocument member = memberWithInitialRate();
+    member.contributionRates = new ArrayList<>(List.of(
+        new ContributionRate(100_000, "2026-01", "2026-07"),
+        new ContributionRate(200_000, "2026-08", "2026-08"),
+        new ContributionRate(200_000, "2026-09", null)));
+    when(members.findById("member-1")).thenReturn(Optional.of(member));
+
+    MemberService service = new MemberService(members, audit);
+    service.update("member-1", request(200_000, "2026-09"), "admin");
+
+    assertThat(member.contributionRates).extracting(rate -> rate.amount)
+        .containsExactly(100_000L, 200_000L);
+    assertThat(member.contributionRates).extracting(rate -> rate.effectiveFrom)
+        .containsExactly("2026-01", "2026-09");
+    assertThat(member.contributionRates).extracting(rate -> rate.effectiveTo)
+        .containsExactly("2026-08", null);
+    assertThat(service.rateFor(member, "2026-08")).isEqualTo(100_000L);
+    assertThat(service.rateFor(member, "2026-09")).isEqualTo(200_000L);
+  }
+
   private MemberDocument memberWithInitialRate() {
     MemberDocument member = new MemberDocument();
     member.id = "member-1";
