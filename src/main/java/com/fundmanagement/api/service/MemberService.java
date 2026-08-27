@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Service;
 public class MemberService {
   private final MemberRepository members;
   private final AuditService audit;
+  private ObjectProvider<PaymentService> paymentServices;
   private MongoTemplate mongoTemplate;
 
   public MemberService(MemberRepository members, AuditService audit) {
@@ -38,6 +40,11 @@ public class MemberService {
   @Autowired
   public void setMongoTemplate(MongoTemplate mongoTemplate) {
     this.mongoTemplate = mongoTemplate;
+  }
+
+  @Autowired
+  public void setPaymentServices(ObjectProvider<PaymentService> paymentServices) {
+    this.paymentServices = paymentServices;
   }
 
   public ApiDtos.CreatedMemberResponse create(ApiDtos.MemberUpsertRequest request, String actor) {
@@ -60,6 +67,10 @@ public class MemberService {
     apply(member, request);
     member.updatedAt = Instant.now();
     persistExisting(member);
+    PaymentService paymentService = paymentServices == null ? null : paymentServices.getIfAvailable();
+    if (paymentService != null) {
+      paymentService.reallocateMemberPayments(member, actor, "Member contribution configuration updated");
+    }
     audit.record(actor, "MEMBER_UPDATED", "member", id, before, Map.of(
         "memberCode", member.memberCode,
         "status", member.status.name(),

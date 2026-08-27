@@ -2,6 +2,7 @@ package com.fundmanagement.api.service;
 
 import com.fundmanagement.api.domain.DuePeriodDocument;
 import com.fundmanagement.api.domain.DueStatus;
+import com.fundmanagement.api.domain.ContributionPeriod;
 import com.fundmanagement.api.domain.ManualPaymentDocument;
 import com.fundmanagement.api.domain.MemberDocument;
 import com.fundmanagement.api.domain.PaymentAllocation;
@@ -58,6 +59,7 @@ public class PaymentService {
     ManualPaymentDocument payment = payments.findByIdempotencyKey(idempotencyKey).orElseGet(() -> createPayment(request, actor));
     if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
     if (!payment.memberId.equals(member.id) || payment.amount != amount) throw new IllegalStateException("Idempotency key was already used for a different payment");
+    payment.allocationMode = "INTENT";
     applySelected(payment, intent.duePeriodIds);
     if (payment.unallocatedAmount != 0) throw new IllegalStateException("Intent allocation does not cover the payment amount");
     updateIntentStatuses(member.id);
@@ -95,6 +97,101 @@ public class PaymentService {
   public ApiDtos.PaymentReversalResponse reverseByIdempotencyKey(String idempotencyKey, String actor, String reason) {
     ManualPaymentDocument payment = payments.findByIdempotencyKey(idempotencyKey).orElseThrow(() -> new IllegalArgumentException("Payment for bank transaction not found"));
     return reverse(payment.id, actor, reason);
+  }
+
+  /**
+   * Refreshes due snapshots from the member's effective rates and rebuilds only
+   * member-wide FIFO allocations. Explicit QR intent allocations stay tied to
+   * their selected periods. Payment documents remain append-only ledger records;
+   * this operation changes allocation projections and records an audit event.
+   */
+  public void reallocateMemberPayments(MemberDocument member, String actor, String reason) {
+    List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(member.id).stream()
+        .sorted(Comparator.comparing(due -> due.month == null ? "" : due.month,
+            ContributionPeriod.comparator()))
+        .toList();
+    List<ManualPaymentDocument> allPayments = payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc(member.id);
+    if (allPayments == null) return;
+    List<ManualPaymentDocument> activePayments = allPayments.stream().filter(payment -> !payment.reversed)
+        .sorted(Comparator.comparing((ManualPaymentDocument payment) -> payment.occurredAt,
+            Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(
+                payment -> payment.createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+        .toList();
+    List<ManualPaymentDocument> fifoPayments = activePayments.stream()
+        .filter(payment -> !"INTENT".equals(payment.allocationMode)).toList();
+    java.util.Set<String> fifoPaymentIds = fifoPayments.stream().map(payment -> payment.id)
+        .collect(java.util.stream.Collectors.toSet());
+    Map<String, String> beforeDue = new java.util.HashMap<>();
+    Map<String, String> beforePayment = fifoPayments.stream()
+        .collect(java.util.stream.Collectors.toMap(payment -> payment.id, this::paymentSummary, (first, second) -> first));
+
+    for (DuePeriodDocument due : periods) {
+      beforeDue.put(due.id, dueSummary(due));
+      long paymentPaid = due.payments == null ? 0 : due.payments.stream()
+          .filter(allocation -> fifoPaymentIds.contains(allocation.paymentId))
+          .mapToLong(allocation -> allocation.amount).sum();
+      due.amountPaid = Math.max(0, due.amountPaid - paymentPaid);
+      if (due.notes == null || due.notes.isBlank()) {
+        long expectedAmount = members.rateFor(member, due.month);
+        due.amountDue = expectedAmount;
+      }
+      if (due.payments == null) due.payments = new ArrayList<>();
+      due.payments.removeIf(allocation -> fifoPaymentIds.contains(allocation.paymentId));
+      due.status = status(due);
+    }
+    for (ManualPaymentDocument payment : fifoPayments) {
+      if (payment.allocations == null) payment.allocations = new ArrayList<>();
+      payment.allocations.clear();
+      payment.unallocatedAmount = payment.amount;
+    }
+
+    for (ManualPaymentDocument payment : fifoPayments) {
+      long remaining = payment.amount;
+      remaining = allocateFifo(payment, periods, remaining);
+      payment.unallocatedAmount = remaining;
+    }
+    for (DuePeriodDocument due : periods) {
+      due.status = status(due);
+      dues.save(due);
+      if (!dueSummary(due).equals(beforeDue.get(due.id)) && audit != null) {
+        audit.record(actor == null ? "system" : actor, "DUE_PERIOD_REALLOCATED", "due_period", due.id,
+            Map.of("before", beforeDue.get(due.id)), Map.of("after", dueSummary(due), "reason", reason == null ? "" : reason));
+      }
+    }
+    for (ManualPaymentDocument payment : fifoPayments) {
+      payments.save(payment);
+      if (!paymentSummary(payment).equals(beforePayment.get(payment.id)) && audit != null) {
+        audit.record(actor == null ? "system" : actor, "PAYMENT_REALLOCATED", "manual_payment", payment.id,
+            Map.of("before", beforePayment.get(payment.id)),
+            Map.of("after", paymentSummary(payment), "reason", reason == null ? "" : reason));
+      }
+    }
+    updateIntentStatuses(member.id);
+  }
+
+  private long allocateFifo(ManualPaymentDocument payment, List<DuePeriodDocument> periods, long remaining) {
+    for (DuePeriodDocument due : periods) {
+      if (remaining == 0) break;
+      long outstanding = Math.max(0, due.amountDue - due.amountPaid);
+      if (outstanding == 0) continue;
+      long allocated = Math.min(remaining, outstanding);
+      due.amountPaid = Math.addExact(due.amountPaid, allocated);
+      due.payments.add(new PaymentAllocation(payment.id, allocated, Instant.now(), "reallocation"));
+      payment.allocations.add(new ManualPaymentDocument.ManualAllocation(due.id, allocated));
+      remaining -= allocated;
+    }
+    return remaining;
+  }
+
+  private String dueSummary(DuePeriodDocument due) {
+    return due.amountDue + ":" + due.amountPaid + ":" + (due.payments == null ? 0 : due.payments.size()) + ":" + due.status;
+  }
+
+  private String paymentSummary(ManualPaymentDocument payment) {
+    String allocations = payment.allocations == null ? "" : payment.allocations.stream()
+        .map(allocation -> allocation.duePeriodId + "=" + allocation.amount)
+        .collect(java.util.stream.Collectors.joining(","));
+    return payment.amount + ":" + payment.unallocatedAmount + ":" + allocations;
   }
   private record ReversalAllocation(DuePeriodDocument due, long amount) {}
   private ManualPaymentDocument createPayment(ApiDtos.ManualPaymentRequest request, String actor) {

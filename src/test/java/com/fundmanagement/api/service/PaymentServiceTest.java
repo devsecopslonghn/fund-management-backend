@@ -18,6 +18,7 @@ import com.fundmanagement.api.repository.PaymentIntentRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -61,6 +62,58 @@ class PaymentServiceTest {
     ApiDtos.ManualPaymentResponse result = service.recordForIntent(intent, 100_000, Instant.parse("2026-09-10T00:00:00Z"), "gmail:provider-1", "system:gmail-auto");
 
     assertThat(result.unallocatedAmount()).isZero(); assertThat(result.allocations()).extracting(ApiDtos.AllocationResponse::duePeriodId).containsExactly("september"); assertThat(july.amountPaid).isZero(); assertThat(september.amountPaid).isEqualTo(100_000); assertThat(september.status).isEqualTo(DueStatus.PAID);
+  }
+  @Test void reallocatesPaidAmountUsingEachMonthsEffectiveRate() {
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    List<DuePeriodDocument> periods = new ArrayList<>();
+    ManualPaymentDocument payment = payment("payment-1", 1_400_000);
+    for (int month = 1; month <= 12; month++) {
+      DuePeriodDocument due = due("due-" + month, String.format("2026-%02d", month), 100_000, 100_000);
+      due.payments.add(new PaymentAllocation(payment.id, 100_000, Instant.now(), "fifo"));
+      payment.allocations.add(new ManualPaymentDocument.ManualAllocation(due.id, 100_000));
+      periods.add(due);
+    }
+    payment.unallocatedAmount = 200_000;
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(periods);
+    when(payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc("member-1")).thenReturn(List.of(payment));
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    when(members.rateFor(org.mockito.ArgumentMatchers.same(member), org.mockito.ArgumentMatchers.anyString()))
+        .thenAnswer(invocation -> invocation.getArgument(1, String.class).compareTo("2026-09") >= 0 ? 200_000L : 100_000L);
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    service.reallocateMemberPayments(member, "admin", "Promotion effective from September");
+
+    assertThat(periods.subList(0, 8)).allMatch(due -> due.amountDue == 100_000 && due.amountPaid == 100_000);
+    assertThat(periods.subList(8, 11)).allMatch(due -> due.amountDue == 200_000 && due.amountPaid == 200_000);
+    assertThat(periods.get(11).amountDue).isEqualTo(200_000);
+    assertThat(periods.get(11).amountPaid).isZero();
+    assertThat(payment.unallocatedAmount).isZero();
+    assertThat(payment.allocations).extracting(allocation -> allocation.duePeriodId)
+        .containsExactly("due-1", "due-2", "due-3", "due-4", "due-5", "due-6", "due-7", "due-8", "due-9", "due-10", "due-11");
+  }
+  @Test void reallocatesPrepaidRemainderWhenNewDuePeriodsAreCreated() {
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    ManualPaymentDocument payment = payment("payment-1", 1_400_000);
+    List<DuePeriodDocument> periods = new ArrayList<>();
+    for (int month = 1; month <= 8; month++) periods.add(due("due-" + month, String.format("2026-%02d", month), 100_000, 0));
+    when(payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc("member-1")).thenReturn(List.of(payment));
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    when(members.rateFor(org.mockito.ArgumentMatchers.same(member), org.mockito.ArgumentMatchers.anyString()))
+        .thenAnswer(invocation -> invocation.getArgument(1, String.class).compareTo("2026-09") >= 0 ? 200_000L : 100_000L);
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(periods);
+
+    service.reallocateMemberPayments(member, "system", "Initial due generation");
+    assertThat(payment.unallocatedAmount).isEqualTo(600_000);
+    for (int month = 9; month <= 11; month++) periods.add(due("due-" + month, String.format("2026-%02d", month), 200_000, 0));
+
+    service.reallocateMemberPayments(member, "system", "Later due generation");
+
+    assertThat(periods).allMatch(due -> due.amountPaid == due.amountDue);
+    assertThat(payment.unallocatedAmount).isZero();
+  }
+  private ManualPaymentDocument payment(String id, long amount) {
+    ManualPaymentDocument payment = new ManualPaymentDocument(); payment.id = id; payment.memberId = "member-1"; payment.amount = amount; payment.unallocatedAmount = amount; payment.occurredAt = Instant.parse("2026-01-01T00:00:00Z"); payment.createdAt = payment.occurredAt; return payment;
   }
   private DuePeriodDocument due(String id, String month, long due, long paid) { DuePeriodDocument value = new DuePeriodDocument(); value.id = id; value.month = month; value.amountDue = due; value.amountPaid = paid; value.status = DueStatus.UNPAID; return value; }
 }

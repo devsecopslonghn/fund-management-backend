@@ -38,6 +38,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class DuesService {
   private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow; private final PaymentReferenceService paymentReferences; private final java.util.Optional<GmailPollingWorker> gmailPollingWorker; private final TaskExecutor taskExecutor;
+  private PaymentService paymentService;
   private MongoTemplate mongoTemplate;
   /** Test-friendly constructor; production uses the audited constructor below. */
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null, null, java.util.Optional.empty(), null); }
@@ -51,6 +52,7 @@ public class DuesService {
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, java.util.Optional<GmailPollingWorker> gmailPollingWorker, TaskExecutor taskExecutor) { this(members, dues, intents, memberService, properties, audit, settings, detectionWindow, null, gmailPollingWorker, taskExecutor); }
   @Autowired public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties, AuditService audit, SettingsService settings, PaymentDetectionWindowService detectionWindow, PaymentReferenceService paymentReferences, java.util.Optional<GmailPollingWorker> gmailPollingWorker, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) { this.members = members; this.dues = dues; this.intents = intents; this.memberService = memberService; this.properties = properties; this.audit = audit; this.settings = settings; this.detectionWindow = detectionWindow; this.paymentReferences = paymentReferences; this.gmailPollingWorker = gmailPollingWorker; this.taskExecutor = taskExecutor; }
   @Autowired public void setMongoTemplate(MongoTemplate mongoTemplate) { this.mongoTemplate = mongoTemplate; }
+  @Autowired(required = false) public void setPaymentService(PaymentService paymentService) { this.paymentService = paymentService; }
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
@@ -60,6 +62,7 @@ public class DuesService {
       // the legacy reference service injectable so old data can still be
       // reconciled, but do not mint random references while generating dues.
       try { dues.save(due); created++; } catch (DuplicateKeyException duplicate) { skipped++; }
+      refreshAllocations(member);
     }
     return new ApiDtos.GenerationResult(month, created, skipped);
   }
@@ -78,6 +81,7 @@ public class DuesService {
         DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = period; due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.seededPaid = due.amountPaid > 0; due.status = status(due);
         try { dues.save(due); created++; if (due.amountPaid > 0) initiallyPaid++; } catch (DuplicateKeyException duplicate) { skipped++; }
       }
+      refreshAllocations(member);
     }
     return new ApiDtos.YearGenerationResult(year, created, skipped, initiallyPaid);
   }
@@ -140,6 +144,7 @@ public class DuesService {
     persistPlanMember(member, start, count, retained);
     Map<String, Object> after = Map.of("contributionStartMonth", start, "annualContributionMonths", count, "initiallyPaidMonths", List.copyOf(retained));
     if (audit != null) audit.record(actor == null ? "unknown" : actor, "PAYMENT_PLAN_SAVED", "member", member.id, before, after);
+    refreshAllocations(member);
     return paymentPlanResponse(member, request.year());
   }
 
@@ -378,6 +383,13 @@ public class DuesService {
     }
     if (!missing.isEmpty()) {
       try { dues.saveAll(missing); } catch (DuplicateKeyException ignored) { /* another request materialized the same plan */ }
+    }
+    refreshAllocations(member);
+  }
+
+  private void refreshAllocations(MemberDocument member) {
+    if (paymentService != null) {
+      paymentService.reallocateMemberPayments(member, "system:dues", "Due period generation or plan materialization");
     }
   }
   private long outstanding(DuePeriodDocument period) { return Math.max(0, period.amountDue - period.amountPaid); }

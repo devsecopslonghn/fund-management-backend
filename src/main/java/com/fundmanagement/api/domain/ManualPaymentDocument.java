@@ -17,6 +17,8 @@ public class ManualPaymentDocument {
   public Instant occurredAt;
   public String note;
   public String recordedBy;
+  /** FIFO is the normal member-wide allocation; INTENT preserves an explicit QR selection. */
+  public String allocationMode = "FIFO";
   public List<ManualAllocation> allocations = new ArrayList<>();
   /** Reversals are append-only financial corrections; the original payment remains auditable. */
   public boolean reversed;
