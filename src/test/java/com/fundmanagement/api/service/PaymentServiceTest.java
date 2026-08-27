@@ -112,6 +112,26 @@ class PaymentServiceTest {
     assertThat(periods).allMatch(due -> due.amountPaid == due.amountDue);
     assertThat(payment.unallocatedAmount).isZero();
   }
+  @Test void combinesUnattributedPartialPaymentsIntoTheOldestOutstandingPeriod() {
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    List<DuePeriodDocument> periods = new ArrayList<>();
+    for (int month = 1; month <= 10; month++) {
+      long amountDue = month <= 8 ? 100_000 : 200_000;
+      long amountPaid = month <= 8 ? 100_000 : 100_000;
+      periods.add(due("due-" + month, String.format("2026-%02d", month), amountDue, amountPaid));
+    }
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(periods);
+    when(payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc("member-1")).thenReturn(List.of());
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    when(members.rateFor(org.mockito.ArgumentMatchers.same(member), org.mockito.ArgumentMatchers.anyString()))
+        .thenAnswer(invocation -> invocation.getArgument(1, String.class).compareTo("2026-09") >= 0 ? 200_000L : 100_000L);
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    service.reallocateMemberPayments(member, "system", "Normalize legacy partial allocations");
+
+    assertThat(periods.get(8).amountPaid).isEqualTo(200_000);
+    assertThat(periods.get(9).amountPaid).isZero();
+  }
   private ManualPaymentDocument payment(String id, long amount) {
     ManualPaymentDocument payment = new ManualPaymentDocument(); payment.id = id; payment.memberId = "member-1"; payment.amount = amount; payment.unallocatedAmount = amount; payment.occurredAt = Instant.parse("2026-01-01T00:00:00Z"); payment.createdAt = payment.occurredAt; return payment;
   }

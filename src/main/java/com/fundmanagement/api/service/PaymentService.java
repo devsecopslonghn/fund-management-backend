@@ -15,8 +15,10 @@ import com.fundmanagement.api.repository.PaymentIntentRepository;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -119,24 +121,36 @@ public class PaymentService {
         .toList();
     List<ManualPaymentDocument> fifoPayments = activePayments.stream()
         .filter(payment -> !"INTENT".equals(payment.allocationMode)).toList();
-    java.util.Set<String> fifoPaymentIds = fifoPayments.stream().map(payment -> payment.id)
+    Set<String> fifoPaymentIds = fifoPayments.stream().map(payment -> payment.id)
         .collect(java.util.stream.Collectors.toSet());
+    Set<String> intentPaymentIds = activePayments.stream().filter(payment -> "INTENT".equals(payment.allocationMode))
+        .map(payment -> payment.id).collect(java.util.stream.Collectors.toSet());
+    long unattributedPaid = 0;
     Map<String, String> beforeDue = new java.util.HashMap<>();
     Map<String, String> beforePayment = fifoPayments.stream()
         .collect(java.util.stream.Collectors.toMap(payment -> payment.id, this::paymentSummary, (first, second) -> first));
 
     for (DuePeriodDocument due : periods) {
       beforeDue.put(due.id, dueSummary(due));
-      long paymentPaid = due.payments == null ? 0 : due.payments.stream()
+      long fifoPaid = due.payments == null ? 0 : due.payments.stream()
           .filter(allocation -> fifoPaymentIds.contains(allocation.paymentId))
           .mapToLong(allocation -> allocation.amount).sum();
-      due.amountPaid = Math.max(0, due.amountPaid - paymentPaid);
+      long intentPaid = due.payments == null ? 0 : due.payments.stream()
+          .filter(allocation -> intentPaymentIds.contains(allocation.paymentId))
+          .mapToLong(allocation -> allocation.amount).sum();
+      long unattributedForDue = Math.max(0, due.amountPaid - fifoPaid - intentPaid);
+      if (due.notes == null || due.notes.isBlank()) {
+        unattributedPaid = Math.addExact(unattributedPaid, unattributedForDue);
+        due.amountPaid = intentPaid;
+      } else {
+        due.amountPaid = Math.max(0, due.amountPaid - fifoPaid);
+      }
       if (due.notes == null || due.notes.isBlank()) {
         long expectedAmount = members.rateFor(member, due.month);
         due.amountDue = expectedAmount;
       }
       if (due.payments == null) due.payments = new ArrayList<>();
-      due.payments.removeIf(allocation -> fifoPaymentIds.contains(allocation.paymentId));
+      due.payments.removeIf(allocation -> !intentPaymentIds.contains(allocation.paymentId));
       due.status = status(due);
     }
     for (ManualPaymentDocument payment : fifoPayments) {
@@ -145,6 +159,13 @@ public class PaymentService {
       payment.unallocatedAmount = payment.amount;
     }
 
+    // Legacy imports and seeded/partial due records may carry paid money
+    // without a corresponding manual_payment allocation. Treat that amount
+    // as an anonymous paid pool so two 100k partials can become one 200k FIFO
+    // payment after a rate boundary changes.
+    if (unattributedPaid > 0) {
+      allocateUnattributed(unattributedPaid, periods);
+    }
     for (ManualPaymentDocument payment : fifoPayments) {
       long remaining = payment.amount;
       remaining = allocateFifo(payment, periods, remaining);
@@ -181,6 +202,21 @@ public class PaymentService {
       remaining -= allocated;
     }
     return remaining;
+  }
+
+  private void allocateUnattributed(long remaining, List<DuePeriodDocument> periods) {
+    for (DuePeriodDocument due : periods) {
+      if (remaining == 0) break;
+      long outstanding = Math.max(0, due.amountDue - due.amountPaid);
+      if (outstanding == 0) continue;
+      long allocated = Math.min(remaining, outstanding);
+      due.amountPaid = Math.addExact(due.amountPaid, allocated);
+      remaining -= allocated;
+    }
+    if (remaining > 0 && !periods.isEmpty()) {
+      DuePeriodDocument last = periods.get(periods.size() - 1);
+      last.amountPaid = Math.addExact(last.amountPaid, remaining);
+    }
   }
 
   private String dueSummary(DuePeriodDocument due) {
