@@ -8,7 +8,7 @@ image:
 imagePullSecret: nexus-registry
 observability:
   enabled: true
-  endpoint: http://otel-collector.observability-dev.svc.cluster.local:4317
+  endpoint: http://collector.observability-dev.svc.cluster.local:4317
   environment: dev
   traceSampling: "0.10"
 runtimeSecret: fund-management-runtime
