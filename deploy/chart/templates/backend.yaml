@@ -52,6 +52,18 @@ spec:
           env:
             - {name: MONGODB_DATABASE, value: fund_management}
             - {name: APP_ALLOWED_ORIGINS, value: https://quybpdev.apps.drgdevlab.com}
+            {{- if .Values.observability.enabled }}
+            - {name: OTEL_SERVICE_NAME, value: fund-management-backend}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.observability.endpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment={{ .Values.observability.environment }},service.namespace={{ .Release.Namespace }}"}
+            - {name: OTEL_TRACES_EXPORTER, value: otlp}
+            - {name: OTEL_METRICS_EXPORTER, value: otlp}
+            - {name: OTEL_LOGS_EXPORTER, value: none}
+            - {name: OTEL_TRACES_SAMPLER, value: parentbased_traceidratio}
+            - {name: OTEL_TRACES_SAMPLER_ARG, value: {{ .Values.observability.traceSampling | quote }}}
+            - {name: OTEL_INSTRUMENTATION_HTTP_EXCLUDED_URLS, value: "^/actuator/health$"}
+            {{- end }}
             {{- if .Values.gmailPubsub.enabled }}
             - {name: FUND_GMAIL_EVENT_ENABLED, value: "true"}
             - {name: FUND_GMAIL_PUBSUB_TOPIC_NAME, value: {{ .Values.gmailPubsub.topicName | quote }}}
