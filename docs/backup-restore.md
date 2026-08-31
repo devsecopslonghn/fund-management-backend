@@ -1,12 +1,18 @@
 # Fund Management MongoDB Backup and Restore
 
-The Helm chart creates a daily `fund-management-mongodb-backup` CronJob. It
-writes compressed `mongodump` archives to the `fund-management-backups`
-Longhorn PVC and removes archives older than 30 days. The job reads
-`MONGODB_URI` from the existing runtime Secret; credentials are never stored in
-this repository.
+The backup chart template is optional and is disabled by default in this
+environment (`backup.enabled=false`) because no approved backup target or
+restore drill is currently configured. With backups disabled, the chart does
+not create the `fund-management-mongodb-backup` CronJob or
+`fund-management-backups` PVC.
 
-## Verify a backup
+To enable it, configure an approved backup policy and complete a restore drill
+first. When enabled, the job writes compressed `mongodump` archives to the
+`fund-management-backups` Longhorn PVC, removes archives older than 30 days,
+and reads `MONGODB_URI` from the existing runtime Secret; credentials are never
+stored in this repository.
+
+## Verify a backup (when explicitly enabled)
 
 ```bash
 kubectl -n fund-management get cronjob fund-management-mongodb-backup
