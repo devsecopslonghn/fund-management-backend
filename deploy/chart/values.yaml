@@ -1,7 +1,7 @@
 # GitHub Actions publishes an immutable GHCR image and updates this value.
 image:
   repository: ghcr.io/devsecopslonghn/fund-management-backend
-  tag: ed55f94a035155960d3416977070e635a495b42c
+  tag: 7e0289959c65778b57fa7020a7cc327236ef628e
   pullPolicy: IfNotPresent
 
 imagePullSecret: nexus-registry
