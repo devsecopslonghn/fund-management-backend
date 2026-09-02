@@ -1,5 +1,4 @@
-# The deployment is intentionally omitted until the CI/CD pipeline publishes
-# an immutable image tag into this application repository.
+# GitHub Actions publishes an immutable GHCR image and updates this value.
 image:
   repository: nexus.apps.drgdevlab.com/fund-management/backend
   tag: ef7a07d3fedc

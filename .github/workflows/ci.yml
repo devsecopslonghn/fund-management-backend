@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    uses: devsecopslonghn/.github/.github/workflows/java-container.yml@master
+    with:
+      java_version: "21"
+      build_command: mvn -B -ntp test
+      image_name: ghcr.io/devsecopslonghn/fund-management-backend
+      dockerfile: Dockerfile
+      publish_image: true
+    secrets: inherit
+
+  update-gitops:
+    needs: build
+    if: ${{ github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Update image reference
+        env:
+          IMAGE_REPOSITORY: ghcr.io/devsecopslonghn/fund-management-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("deploy/chart/values.yaml")
+          text = path.read_text()
+          text = text.replace("repository: nexus.apps.drgdevlab.com/fund-management/backend", f"repository: {os.environ['IMAGE_REPOSITORY']}")
+          lines = text.splitlines()
+          in_image = False
+          changed = False
+          for index, line in enumerate(lines):
+              if line == "image:":
+                  in_image = True
+              elif in_image and line and not line.startswith(" "):
+                  in_image = False
+              elif in_image and line.startswith("  tag:"):
+                  lines[index] = f"  tag: {os.environ['IMAGE_TAG']}"
+                  changed = True
+          if not changed:
+              raise SystemExit("image.tag was not found")
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Commit GitOps reference
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add deploy/chart/values.yaml
+          git diff --cached --quiet || git commit -m "chore(gitops): deploy backend ${{ github.sha }} [skip ci]"
+          git push
