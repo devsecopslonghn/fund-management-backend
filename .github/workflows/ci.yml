@@ -24,19 +24,11 @@ jobs:
     needs: build
     if: ${{ github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - name: Checkout Helm chart
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          repository: devsecopslonghn/fund-management-backend-helm-chart
-          ref: master
-          token: ${{ secrets.GITOPS_TOKEN }}
-          path: chart
 
       - name: Update image reference
-        working-directory: chart
         env:
           IMAGE_REPOSITORY: ghcr.io/devsecopslonghn/fund-management-backend
           IMAGE_TAG: ${{ github.sha }}
@@ -45,7 +37,7 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path("values.yaml")
+          path = Path("deploy/chart/values.yaml")
           text = path.read_text()
           text = text.replace("repository: nexus.apps.drgdevlab.com/fund-management/backend", f"repository: {os.environ['IMAGE_REPOSITORY']}")
           lines = text.splitlines()
@@ -65,10 +57,9 @@ jobs:
           PY
 
       - name: Commit GitOps reference
-        working-directory: chart
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add values.yaml
+          git add deploy/chart/values.yaml
           git diff --cached --quiet || git commit -m "chore(gitops): deploy backend ${{ github.sha }} [skip ci]"
-          git push origin master
+          git push

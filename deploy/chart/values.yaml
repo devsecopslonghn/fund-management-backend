@@ -1,0 +1,41 @@
+# GitHub Actions publishes an immutable GHCR image and updates this value.
+image:
+  repository: ghcr.io/devsecopslonghn/fund-management-backend
+  tag: ed55f94a035155960d3416977070e635a495b42c
+  pullPolicy: IfNotPresent
+
+imagePullSecret: nexus-registry
+observability:
+  enabled: true
+  endpoint: http://collector.observability-dev.svc.cluster.local:4317
+  environment: dev
+  traceSampling: "0.10"
+runtimeSecret: fund-management-runtime
+adminSecret: fund-management-admin
+gmailPubsub:
+  enabled: true
+  topicName: projects/fund-management-prod/topics/fund-management-gmail-events
+  secretName: fund-management-gmail-pubsub
+replicas: 2
+scheduling:
+  # Empty by default: the backend may run on any schedulable cluster node.
+  # Set selectors only for an intentional maintenance or incident constraint.
+  nodeSelector: {}
+  podAntiAffinity: true
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+backup:
+  # Backups are intentionally disabled in this environment per the approved
+  # cleanup decision. Re-enable only with an approved backup target and restore
+  # drill.
+  enabled: false
+  schedule: "30 1 * * *"
+  timeZone: Asia/Ho_Chi_Minh
+  retentionDays: 30
+  image: mongo:8.0
+  storageClassName: longhorn-workers
+  storageSize: 10Gi
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: 500m, memory: 768Mi}
