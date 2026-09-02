@@ -258,7 +258,7 @@ Requirements are grouped into 8 modules (A–H). Format: `FR-[Module]-[No.]`.
 | Backup & Recovery | Daily MongoDB backup (`mongodump` or volume snapshot), retention ≥30 days. Documented restore runbook. |
 | Auditability | Every create/update/delete on financial data is audit-logged (actor, timestamp, before/after values). |
 | Data Portability | Full data export (members, transactions, expenses) to CSV/Excel at any time — avoid vendor/data lock-in. |
-| Maintainability | Containerized (Docker), Infrastructure as Code (Helm chart/Ansible), CI/CD pipeline (build → test → deploy), matching the treasurer's existing tooling (Jenkins/GitLab CI, ArgoCD). |
+| Maintainability | Containerized (Docker), Infrastructure as Code (Helm chart/Ansible), CI/CD pipeline (build → test → deploy), matching the treasurer's existing tooling (GitHub Actions/GitLab CI, ArgoCD). |
 | Device Compatibility | Responsive UI, mobile-first, since most members will access via phone. |
 
 ---
@@ -463,7 +463,7 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 | Notifications | SMTP (SendGrid/Amazon SES, or an internal SMTP relay) | Confirmation/reminder/alert emails |
 | Observability | Prometheus + Grafana (metrics), ELK/Kibana or an OpenTelemetry Collector (logs/traces) | Monitor the email worker, API, and alerting |
 | Deployment | Docker images, Helm chart, ArgoCD (GitOps), on the treasurer's self-managed VPS/Kubernetes | Matches the chosen self-hosted model |
-| CI/CD | GitHub Actions/Jenkins/GitLab CI → build & test → push to registry → ArgoCD sync | Reuses existing familiar pipelines |
+| CI/CD | GitHub Actions/GitLab CI → build & test → push to registry → ArgoCD sync | Reuses existing familiar pipelines |
 
 ### 8.2 Mailbox Connection Security
 
@@ -479,7 +479,7 @@ Suggested thresholds (configurable, not hard-coded): combined confidence **≥ 0
 - Production SPA requests **must** use the relative same-origin `/api/v1` base path. The browser must never receive a Kubernetes `*.svc` address or a direct/public backend host; only the in-cluster Nginx proxy resolves the backend Service FQDN.
 - Nginx must use bounded upstream connect/read timeouts and return a gateway failure promptly when no backend endpoint is ready. The UI must distinguish that unavailable state from a valid "member not found" result.
 - The backend may schedule on every eligible node. DNS/TLS egress to the managed MongoDB cluster is an operational prerequisite verified before rollouts; use a temporary Helm node selector only during a diagnosed infrastructure incident.
-- Centralized logging via Fluentd/OTel Collector → Elasticsearch/Kibana (reusing prior experience with the Jenkins/GitLab logging pipeline).
+- Centralized logging via Fluentd/OTel Collector → Elasticsearch/Kibana (reusing prior experience with the GitHub Actions/GitLab logging pipeline).
 
 ### 8.4 Repository & Documentation Strategy (Two Repos)
 
