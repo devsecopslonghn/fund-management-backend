@@ -52,6 +52,7 @@ public class GmailPollingWorker {
   /** A newly started replica should reconcile once before waiting for the batch interval. */
   @EventListener
   public void onApplicationReady(ApplicationReadyEvent event) {
+    log.info("Gmail application-ready poll triggered");
     scheduleImmediatePoll();
   }
   private void scheduleImmediatePoll() {
@@ -62,7 +63,7 @@ public class GmailPollingWorker {
   private void runPoll() {
     Optional<GmailPollingLeaseService.LeaseHandle> acquired;
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }
-    if (acquired.isEmpty()) return;
+    if (acquired.isEmpty()) { log.debug("Gmail poll skipped because another replica owns the lease"); return; }
     try {
       List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchSacombankMessages();
       log.info("Gmail poll fetched {} candidate bank alert(s)", messages.size());
