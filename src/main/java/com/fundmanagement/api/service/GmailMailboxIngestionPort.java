@@ -190,7 +190,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
     String query = URLEncoder.encode(gmailSearchQuery(expectedAccount), StandardCharsets.UTF_8);
-    List<String> candidateIds = new ArrayList<>(); List<String> threadIds = new ArrayList<>();
+    List<String> candidateIds = new ArrayList<>();
     String pageToken = "";
     do {
       String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
@@ -199,12 +199,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       for (JsonNode item : list.path("messages")) {
         String id = item.path("id").asText("");
         if (!id.isBlank()) candidateIds.add(id);
-        String threadId = item.path("threadId").asText("");
-        if (!threadId.isBlank()) threadIds.add(threadId);
       }
       pageToken = list.path("nextPageToken").asText("");
     } while (!pageToken.isBlank());
-    for (String threadId : threadIds) candidateIds.addAll(threadMessageIds(mailbox, token, threadId));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -255,12 +252,6 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
     }
     return messages;
-  }
-  private List<String> threadMessageIds(String mailbox, String token, String threadId) {
-    String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/threads/" + URLEncoder.encode(threadId, StandardCharsets.UTF_8) + "?format=minimal";
-    JsonNode thread = get(url, token); List<String> ids = new ArrayList<>();
-    for (JsonNode message : thread.path("messages")) { String id = message.path("id").asText(""); if (!id.isBlank()) ids.add(id); }
-    return ids;
   }
   private boolean isConfiguredReceivingAlert(String raw) {
     String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");

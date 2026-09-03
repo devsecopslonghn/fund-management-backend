@@ -30,7 +30,7 @@ class GmailMailboxIngestionPortTest {
         .isInstanceOf(IllegalArgumentException.class);
   }
 
-  @Test void filtersMessagesExpandedFromAThreadUsingDecodedReceivingAccount() throws Exception {
+  @Test void onlyFetchesMessagesReturnedByAccountSearch() throws Exception {
     HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
     String incoming = "MIME-Version: 1.0\r\n"
         + "Content-Type: text/plain; charset=UTF-8\r\n"
