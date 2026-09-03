@@ -32,11 +32,16 @@ import java.io.IOException;
 import java.util.Properties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Gmail API adapter with readonly scope; it never labels, marks read, deletes, or sends. */
 @Component
 @ConditionalOnProperty(prefix = "app.gmail", name = "enabled", havingValue = "true")
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
+  private static final Logger log = LoggerFactory.getLogger(GmailMailboxIngestionPort.class);
+  private static final String RECENT_MAIL_QUERY = "newer_than:30d";
+  private static final int MAX_MESSAGE_LIST_PAGES = 10;
   private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions; private final SacombankMessageParser parser;
   public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions, SacombankMessageParser parser) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.parser = parser; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
 
@@ -87,6 +92,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       String transferEncoding, String disposition, int declaredSize) {}
 
   private record GmailMessageMetadata(String threadId, Instant gmailInternalDate) {}
+  private record FetchResult(List<MailboxMessage> messages, int rawFetched, int rejected) {}
 
   private GmailDiagnosticMessage diagnose(String messageId, GmailMessageMetadata metadata, byte[] rawBytes, String expectedAccount) {
     MimeMessage mime = null;
@@ -191,22 +197,27 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (expectedAccount.isBlank()) return List.of();
     List<String> candidateIds = listMessageIds(mailbox, token, gmailSearchQuery(expectedAccount));
     // Some forwarded bank alerts are not indexed by Gmail's bank/sender
-    // query. Bound the fallback to recent mail so a malformed mailbox cannot
-    // turn every poll into an unbounded raw-MIME download.
-    if (candidateIds.isEmpty()) candidateIds = listMessageIds(mailbox, token, "newer_than:30d");
+    // query. Always merge a bounded recent-mail scan so the presence of older
+    // indexed alerts cannot suppress newly-arrived forwarded alerts.
+    candidateIds.addAll(listMessageIds(mailbox, token, RECENT_MAIL_QUERY));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
     // scans therefore fetch only provider IDs not already persisted locally.
     Set<String> known = transactions.findByProviderMessageIdIn(candidateIds).stream()
         .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
-    return fetchNewMessages(mailbox, token, candidateIds, known);
+    FetchResult result = fetchNewMessages(mailbox, token, candidateIds, known);
+    log.info("Gmail mailbox scan candidates={} known={} rawFetched={} matched={} rejected={} configuredAccount={}",
+        candidateIds.size(), known.size(), result.rawFetched(), result.messages().size(), result.rejected(), maskAccount(expectedAccount));
+    return result.messages();
   }
 
   private List<String> listMessageIds(String mailbox, String token, String query) {
     List<String> ids = new ArrayList<>();
     String pageToken = "";
+    int pages = 0;
     do {
+      pages++;
       String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100";
       if (query != null && !query.isBlank()) url += "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
       if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
@@ -216,7 +227,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
         if (!id.isBlank()) ids.add(id);
       }
       pageToken = list.path("nextPageToken").asText("");
-    } while (!pageToken.isBlank());
+    } while (!pageToken.isBlank() && pages < MAX_MESSAGE_LIST_PAGES);
+    if (!pageToken.isBlank()) log.warn("Gmail message listing stopped at page limit queryType={} pages={}",
+        query.equals(RECENT_MAIL_QUERY) ? "recent" : "bank", pages);
     return new ArrayList<>(new LinkedHashSet<>(ids));
   }
 
@@ -248,19 +261,23 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (ids.isEmpty()) return List.of();
     Set<String> known = transactions.findByProviderMessageIdIn(ids).stream()
         .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
-    return fetchNewMessages(mailbox, token, ids, known);
+    return fetchNewMessages(mailbox, token, ids, known).messages();
   }
 
-  private List<MailboxMessage> fetchNewMessages(String mailbox, String token, Collection<String> ids, Set<String> known) {
+  private FetchResult fetchNewMessages(String mailbox, String token, Collection<String> ids, Set<String> known) {
     List<MailboxMessage> messages = new ArrayList<>();
+    int rawFetched = 0;
+    int rejected = 0;
     for (String id : ids) if (!known.contains(id)) {
       String raw = rawMessage(mailbox, id, token);
+      rawFetched++;
       // Gmail search can match a thread because another message in that
       // thread contains the configured account. Re-check each expanded raw
       // message before handing it to ingestion.
       if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
+      else rejected++;
     }
-    return messages;
+    return new FetchResult(List.copyOf(messages), rawFetched, rejected);
   }
   private boolean isConfiguredReceivingAlert(String raw) {
     String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
