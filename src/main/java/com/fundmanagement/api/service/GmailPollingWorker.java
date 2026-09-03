@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,14 @@ public class GmailPollingWorker {
   @EventListener
   public void onGmailConnected(GmailOAuthConnectedEvent event) {
     lastBatchPollAt.set(0);
+    scheduleImmediatePoll();
+  }
+  /** A newly started replica should reconcile once before waiting for the batch interval. */
+  @EventListener
+  public void onApplicationReady(ApplicationReadyEvent event) {
+    scheduleImmediatePoll();
+  }
+  private void scheduleImmediatePoll() {
     Runnable poll = this::pollNow;
     try { if (taskExecutor == null) poll.run(); else taskExecutor.execute(poll); }
     catch (RuntimeException failure) { log.warn("Immediate Gmail poll could not be scheduled: {}", failure.getMessage()); }

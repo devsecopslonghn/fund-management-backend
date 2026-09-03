@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.fundmanagement.api.dto.ApiDtos;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -37,6 +38,12 @@ class GmailPollingWorkerTest {
     var handle = new GmailPollingLeaseService.LeaseHandle("pod-a", "token"); when(lease.tryAcquire()).thenReturn(java.util.Optional.of(handle));
     var worker = new GmailPollingWorker(mailbox, ingestion, lease);
     worker.onGmailConnected(new GmailOAuthConnectedEvent());
+    verify(mailbox).fetchSacombankMessages(); verify(lease).release(handle);
+  }
+  @Test void applicationReadyTriggersAnImmediatePoll() {
+    var handle = new GmailPollingLeaseService.LeaseHandle("pod-a", "token"); when(lease.tryAcquire()).thenReturn(java.util.Optional.of(handle));
+    var worker = new GmailPollingWorker(mailbox, ingestion, lease);
+    worker.onApplicationReady(new ApplicationReadyEvent(new org.springframework.boot.SpringApplication(), new String[0], null, null));
     verify(mailbox).fetchSacombankMessages(); verify(lease).release(handle);
   }
 }
