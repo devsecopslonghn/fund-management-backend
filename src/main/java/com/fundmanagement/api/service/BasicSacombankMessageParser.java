@@ -5,19 +5,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.Properties;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import jakarta.mail.BodyPart;
-import jakarta.mail.Message;
-import jakarta.mail.MessagingException;
-import jakarta.mail.Multipart;
-import jakarta.mail.Part;
-import jakarta.mail.Session;
 import org.springframework.stereotype.Component;
 
 /** Conservative parser for redacted key/value and Sacombank bilingual alert variants. */
@@ -37,7 +27,7 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
 
   @Override public ParsedBankMessage parse(String rawPayload) {
     if (rawPayload == null || rawPayload.isBlank()) throw new IllegalArgumentException("Empty bank message");
-    String raw = decodeHtmlEntities(readablePayload(rawPayload))
+    String raw = decodeHtmlEntities(SacombankMessageText.readablePayload(rawPayload))
         // Preserve table-cell/row boundaries; bank HTML templates often put
         // the whole table on one physical line, so replacing every tag with a
         // space would make a field regex consume the following fields.
@@ -103,29 +93,4 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
     try { return LocalDateTime.parse(value, VIB_DATE_TIME).atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(); } catch (DateTimeParseException ignored) { return null; }
   }
 
-  /** Gmail API returns RFC 822/MIME raw messages; extract decoded text parts before parsing. */
-  private String readablePayload(String rawPayload) {
-    if (!rawPayload.regionMatches(true, 0, "MIME-Version:", 0, "MIME-Version:".length())
-        && !rawPayload.contains("\nContent-Type:") && !rawPayload.contains("\r\nContent-Type:")) return rawPayload;
-    try {
-      Message message = new jakarta.mail.internet.MimeMessage(Session.getInstance(new Properties()), new ByteArrayInputStream(rawPayload.getBytes(StandardCharsets.UTF_8)));
-      StringBuilder text = new StringBuilder();
-      appendText(message, text);
-      return text.isEmpty() ? rawPayload : text.toString();
-    } catch (MessagingException | IOException ignored) {
-      return rawPayload;
-    }
-  }
-
-  private void appendText(Part part, StringBuilder text) throws MessagingException, IOException {
-    Object content = part.getContent();
-    if (content instanceof String value) {
-      text.append(value).append('\n');
-    } else if (content instanceof Multipart multipart) {
-      for (int index = 0; index < multipart.getCount(); index++) {
-        BodyPart bodyPart = multipart.getBodyPart(index);
-        if (!Part.ATTACHMENT.equalsIgnoreCase(bodyPart.getDisposition())) appendText(bodyPart, text);
-      }
-    }
-  }
 }

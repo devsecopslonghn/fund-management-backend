@@ -17,6 +17,8 @@ import com.fundmanagement.api.repository.BankTransactionRepository;
 import com.fundmanagement.api.repository.MemberRepository;
 import com.fundmanagement.api.repository.PaymentIntentRepository;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,18 @@ class IngestionServiceTest {
     when(transactions.insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>any())).thenAnswer(invocation -> { BankTransactionDocument tx = invocation.getArgument(0); tx.id = saved.id; return tx; });
     IngestionService service = service();
     var result = service.ingest(new ApiDtos.BankTransactionIngestionRequest("provider-recover", "Account marker 0661111111"));
+    assertThat(result.reconciliationStatus()).isEqualTo("NEEDS_REVIEW");
+    verify(transactions).insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>argThat(tx -> "0661111111".equals(tx.accountNumber)));
+  }
+  @Test void recoversConfiguredAccountFromDecodedMimeBodyWhenParserSawAnotherNumericToken() {
+    String body = "Account: 0661111111\nAmount: + 100,000 VND\nDescription: QUY A001 082026\n";
+    String raw = "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n"
+        + "Content-Transfer-Encoding: base64\r\n\r\n"
+        + Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8));
+    when(settings.ingestionStatus()).thenReturn(new ApiDtos.IngestionStatusResponse(true, true, false, "synthetic", "test")); when(settings.get()).thenReturn(settings("0661111111")); when(transactions.findByProviderMessageId("provider-mime-recover")).thenReturn(Optional.empty());
+    when(parser.parse(raw)).thenReturn(new SacombankMessageParser.ParsedBankMessage(Instant.now(), 100_000, "IN", "091234567", "QUY A001 082026", 900_000L));
+    when(transactions.insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>any())).thenAnswer(invocation -> { BankTransactionDocument tx = invocation.getArgument(0); tx.id = "tx-mime-recover"; return tx; });
+    var result = service().ingest(new ApiDtos.BankTransactionIngestionRequest("provider-mime-recover", raw));
     assertThat(result.reconciliationStatus()).isEqualTo("NEEDS_REVIEW");
     verify(transactions).insert(org.mockito.ArgumentMatchers.<BankTransactionDocument>argThat(tx -> "0661111111".equals(tx.accountNumber)));
   }

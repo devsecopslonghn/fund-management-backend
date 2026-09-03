@@ -79,7 +79,8 @@ public class IngestionService {
   private boolean rawContainsAccount(String rawPayload, String expected) {
     String wanted = normalizeDigits(expected);
     if (rawPayload == null || wanted == null) return false;
-    String text = rawPayload.replaceAll("(?s)<[^>]*>", " ").replaceAll("&#x([0-9a-fA-F]+);", " ").replaceAll("&#([0-9]+);", " ");
+    String text = SacombankMessageText.readablePayload(rawPayload)
+        .replaceAll("(?s)<[^>]*>", " ").replaceAll("&#x([0-9a-fA-F]+);", " ").replaceAll("&#([0-9]+);", " ");
     for (String line : text.split("\\R")) if (normalizeDigits(line) != null && normalizeDigits(line).contains(wanted)) return true;
     return normalizeDigits(text) != null && normalizeDigits(text).contains(wanted);
   }
