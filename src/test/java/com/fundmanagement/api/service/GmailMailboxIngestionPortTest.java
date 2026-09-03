@@ -21,8 +21,15 @@ import org.junit.jupiter.api.Test;
 class GmailMailboxIngestionPortTest {
   @Test void searchAlwaysContainsTheConfiguredReceivingAccount() {
     String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
-    assertThat(query).isEqualTo("(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn) \"000123456\"");
+    assertThat(query).contains("\"000123456\"");
+    assertThat(query).contains("\"000 123 456\"");
     assertThat(query).doesNotContainIgnoringCase("unread");
+  }
+
+  @Test void searchesCommonAccountNumberSeparators() {
+    assertThat(GmailMailboxIngestionPort.accountSearchVariants("066007102000"))
+        .containsExactly("066007102000", "0660 0710 2000", "0660-0710-2000", "0660.0710.2000",
+            "066 007 102 000", "066-007-102-000", "066.007.102.000");
   }
 
   @Test void searchFailsClosedWithoutAConfiguredReceivingAccount() {
