@@ -271,26 +271,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    // Match all Sacombank alert variants while requiring the configured
-    // receiving account. There is intentionally no unread/state predicate.
-    String accountQuery = accountSearchVariants(digits).stream()
-        .map(value -> "\"" + value + "\"")
-        .collect(Collectors.joining(" OR ", "(", ")"));
-    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn) " + accountQuery;
-  }
-  static List<String> accountSearchVariants(String accountNumber) {
-    String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
-    if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    LinkedHashSet<String> variants = new LinkedHashSet<>();
-    variants.add(digits);
-    for (int groupSize : List.of(4, 3)) {
-      if (digits.length() % groupSize != 0) continue;
-      String grouped = digits.replaceAll("(.{" + groupSize + "})(?!$)", "$1 ").trim();
-      variants.add(grouped);
-      variants.add(grouped.replace(' ', '-'));
-      variants.add(grouped.replace(' ', '.'));
-    }
-    return List.copyOf(variants);
+    // Gmail does not reliably index account numbers embedded in MIME/HTML
+    // with separators. Search only the bank identity, then enforce the
+    // configured receiving account on each decoded raw message below. There
+    // is intentionally no unread/state predicate.
+    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn)";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
