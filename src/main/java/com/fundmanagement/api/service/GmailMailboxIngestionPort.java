@@ -197,9 +197,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (expectedAccount.isBlank()) return List.of();
     List<String> candidateIds = listMessageIds(mailbox, token, gmailSearchQuery(expectedAccount));
     // Some forwarded bank alerts are not indexed by Gmail's bank/sender
-    // query. Always merge a bounded recent-mail scan so the presence of older
-    // indexed alerts cannot suppress newly-arrived forwarded alerts.
-    candidateIds.addAll(listMessageIds(mailbox, token, RECENT_MAIL_QUERY));
+    // query. Use the bounded recent-mail scan only when the targeted query
+    // has no result; otherwise every poll would perform two mailbox scans.
+    if (candidateIds.isEmpty()) candidateIds = listMessageIds(mailbox, token, RECENT_MAIL_QUERY);
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m

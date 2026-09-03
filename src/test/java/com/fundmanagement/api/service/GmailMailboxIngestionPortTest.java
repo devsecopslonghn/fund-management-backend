@@ -71,6 +71,50 @@ class GmailMailboxIngestionPortTest {
     }
   }
 
+  @Test void fetchesTheExactSacombankEmailProvidedByUser() throws Exception {
+    HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+    String email = "MIME-Version: 1.0\r\n"
+        + "Content-Type: text/html; charset=UTF-8\r\n\r\n"
+        + "<table><tr><td>Tài khoản/*Account*</td><td>066007102000</td></tr>"
+        + "<tr><td>Ngày/*Date*</td><td>03/09/2026 11:27</td></tr>"
+        + "<tr><td>Phát sinh/*Transaction*</td><td>+ 500,000 VND</td></tr>"
+        + "<tr><td>Số dư khả dụng/*Available balance*</td><td>500,019 VND</td></tr>"
+        + "<tr><td>Nội dung/*Description*</td><td>EWX640963771 huynt dong quy t4 5 6 7 8</td></tr></table>";
+    server.createContext("/gmail/v1", exchange -> {
+      String path = exchange.getRequestURI().getPath();
+      if (path.endsWith("/messages")) respond(exchange, "{\"messages\":[{\"id\":\"sacombank-20260903\"}]}");
+      else if (path.endsWith("/messages/sacombank-20260903")) respond(exchange, raw(email));
+      else respond(exchange, "{}");
+    });
+    server.start();
+    try {
+      GmailProperties properties = new GmailProperties();
+      properties.setMonitoredMailbox("fund@example.test");
+      properties.setApiBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/gmail/v1");
+      GmailOAuthService oauth = mock(GmailOAuthService.class); when(oauth.accessToken()).thenReturn("local-test-token");
+      SettingsService settings = mock(SettingsService.class);
+      when(settings.get()).thenReturn(new ApiDtos.SettingsResponse(100_000, 0.85, "Sacombank", "9704",
+          "066007102000", "Fund", false, false, true, true, "noreply@sacombank.com", false, "", 587, ""));
+      BankTransactionRepository transactions = mock(BankTransactionRepository.class);
+      when(transactions.findByProviderMessageIdIn(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(java.util.List.of());
+      GmailMailboxIngestionPort port = new GmailMailboxIngestionPort(properties, oauth, new ObjectMapper(),
+          settings, transactions, new BasicSacombankMessageParser());
+
+      var result = port.fetchSacombankMessages();
+
+      assertThat(result).singleElement().satisfies(message -> {
+        assertThat(message.providerMessageId()).isEqualTo("sacombank-20260903");
+        var parsed = new BasicSacombankMessageParser().parse(message.rawPayload());
+        assertThat(parsed.accountNumber()).isEqualTo("066007102000");
+        assertThat(parsed.amount()).isEqualTo(500_000L);
+        assertThat(parsed.direction()).isEqualTo("IN");
+        assertThat(parsed.parsedContent()).contains("EWX640963771");
+      });
+    } finally {
+      server.stop(0);
+    }
+  }
+
   @Test void diagnosticReadsOneThreadWithoutReturningRawMimeAndRedactsAccountAndEmail() throws Exception {
     HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
     String incoming = "MIME-Version: 1.0\r\n"
