@@ -21,6 +21,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -35,8 +37,9 @@ public class GmailOAuthService {
   public static final String READ_ONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
   private static final String CREDENTIAL_ID = "singleton";
   private static final Logger log = LoggerFactory.getLogger(GmailOAuthService.class);
-  private final GmailProperties properties; private final GmailTokenCrypto crypto; private final GmailOAuthStateRepository states; private final GmailCredentialRepository credentials; private final MongoTemplate mongo; private final AuditService audit; private final ObjectMapper mapper; private final HttpClient http; private final SecureRandom random = new SecureRandom();
-  public GmailOAuthService(GmailProperties properties, GmailTokenCrypto crypto, GmailOAuthStateRepository states, GmailCredentialRepository credentials, MongoTemplate mongo, AuditService audit, ObjectMapper mapper) { this.properties = properties; this.crypto = crypto; this.states = states; this.credentials = credentials; this.mongo = mongo; this.audit = audit; this.mapper = mapper; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
+  private final GmailProperties properties; private final GmailTokenCrypto crypto; private final GmailOAuthStateRepository states; private final GmailCredentialRepository credentials; private final MongoTemplate mongo; private final AuditService audit; private final ObjectMapper mapper; private final ApplicationEventPublisher events; private final HttpClient http; private final SecureRandom random = new SecureRandom();
+  public GmailOAuthService(GmailProperties properties, GmailTokenCrypto crypto, GmailOAuthStateRepository states, GmailCredentialRepository credentials, MongoTemplate mongo, AuditService audit, ObjectMapper mapper) { this(properties, crypto, states, credentials, mongo, audit, mapper, null); }
+  @Autowired public GmailOAuthService(GmailProperties properties, GmailTokenCrypto crypto, GmailOAuthStateRepository states, GmailCredentialRepository credentials, MongoTemplate mongo, AuditService audit, ObjectMapper mapper, ApplicationEventPublisher events) { this.properties = properties; this.crypto = crypto; this.states = states; this.credentials = credentials; this.mongo = mongo; this.audit = audit; this.mapper = mapper; this.events = events; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
 
   public ApiDtos.GmailOAuthStartResponse start(String actor) {
     requireConfigured();
@@ -57,6 +60,7 @@ public class GmailOAuthService {
     String mailbox = verifyMailbox(accessToken);
     GmailCredentialDocument credential = new GmailCredentialDocument(); credential.id = CREDENTIAL_ID; credential.encryptedRefreshToken = crypto.encrypt(refreshToken, properties.getTokenEncryptionKey()); credential.mailbox = mailbox; credential.scopes = List.of(READ_ONLY_SCOPE); credential.connectedAt = Instant.now(); credential.connectedBy = state.actor; credential.lastRefreshAt = null; credential.lastRefreshFailureAt = null; credential.lastRefreshErrorCode = null; credentials.save(credential);
     audit.record(state.actor, "GMAIL_CONNECTED", "gmail_credential", CREDENTIAL_ID, Map.of(), Map.of("mailbox", mailbox, "scope", READ_ONLY_SCOPE));
+    if (events != null) events.publishEvent(new GmailOAuthConnectedEvent());
     return new ApiDtos.GmailOAuthCallbackResponse(true, "Gmail read-only connection established");
   }
 

@@ -33,4 +33,10 @@ class GmailPollingWorkerTest {
     new GmailPollingWorker(mailbox, ingestion, lease).pollNow();
     verify(mailbox).fetchSacombankMessages(); verify(lease).release(handle);
   }
+  @Test void oauthReconnectResetsBatchScheduleAndPollsImmediately() {
+    var handle = new GmailPollingLeaseService.LeaseHandle("pod-a", "token"); when(lease.tryAcquire()).thenReturn(java.util.Optional.of(handle));
+    var worker = new GmailPollingWorker(mailbox, ingestion, lease);
+    worker.onGmailConnected(new GmailOAuthConnectedEvent());
+    verify(mailbox).fetchSacombankMessages(); verify(lease).release(handle);
+  }
 }

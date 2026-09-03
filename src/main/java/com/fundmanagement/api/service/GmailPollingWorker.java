@@ -4,6 +4,9 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
@@ -15,11 +18,11 @@ import java.util.concurrent.atomic.AtomicLong;
 @ConditionalOnProperty(prefix = "app.gmail", name = "polling-enabled", havingValue = "true")
 public class GmailPollingWorker {
   private static final Logger log = LoggerFactory.getLogger(GmailPollingWorker.class);
-  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow; private final SettingsService settings; private final AtomicLong lastBatchPollAt = new AtomicLong(0);
+  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow; private final SettingsService settings; private final TaskExecutor taskExecutor; private final AtomicLong lastBatchPollAt = new AtomicLong(0);
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null, null); }
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this(mailbox, ingestion, leaseService, detectionWindow, null); }
-  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow, SettingsService settings) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; this.settings = settings; }
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null, null, null); }
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this(mailbox, ingestion, leaseService, detectionWindow, null, null); }
+  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow, SettingsService settings, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; this.settings = settings; this.taskExecutor = taskExecutor; }
   /** Full mailbox reconciliation. The ten-second scheduler tick only checks the persisted interval; it does not call Gmail unless due. */
   @Scheduled(fixedDelayString = "${app.gmail.scheduler-tick-ms:10000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
   public void poll() {
@@ -39,6 +42,14 @@ public class GmailPollingWorker {
   }
   /** Queued after a payment intent is created so a just-arrived alert is not delayed five seconds. */
   public void pollNow() { runPoll(); }
+  /** A successful OAuth reconnect must not wait for the previous failed batch interval. */
+  @EventListener
+  public void onGmailConnected(GmailOAuthConnectedEvent event) {
+    lastBatchPollAt.set(0);
+    Runnable poll = this::pollNow;
+    try { if (taskExecutor == null) poll.run(); else taskExecutor.execute(poll); }
+    catch (RuntimeException failure) { log.warn("Immediate Gmail poll could not be scheduled: {}", failure.getMessage()); }
+  }
   private void runPoll() {
     Optional<GmailPollingLeaseService.LeaseHandle> acquired;
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }

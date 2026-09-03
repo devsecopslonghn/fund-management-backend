@@ -31,6 +31,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperties;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 
 /** Gmail push adapter. Polling remains the recovery path for delayed/dropped notifications. */
 @Service
@@ -86,6 +87,13 @@ public class GmailPushService {
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail watch registration interrupted", ex);
     }
+  }
+
+  /** Re-register the watch immediately after OAuth reconnect instead of waiting for the hourly renewal tick. */
+  @EventListener
+  public void onGmailConnected(GmailOAuthConnectedEvent event) {
+    try { registerWatch(); }
+    catch (RuntimeException failure) { log.warn("Gmail Pub/Sub watch registration after OAuth reconnect failed: {}", safeMessage(failure)); }
   }
 
   /** Renew before expiry. Gmail watches expire in at most seven days. */
