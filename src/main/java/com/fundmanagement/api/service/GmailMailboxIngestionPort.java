@@ -189,20 +189,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String token = oauth.accessToken(); String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
-    String query = gmailSearchQuery(expectedAccount);
-    List<String> candidateIds = new ArrayList<>();
-    String pageToken = "";
-    do {
-      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100";
-      if (!query.isBlank()) url += "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
-      if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
-      JsonNode list = get(url, token);
-      for (JsonNode item : list.path("messages")) {
-        String id = item.path("id").asText("");
-        if (!id.isBlank()) candidateIds.add(id);
-      }
-      pageToken = list.path("nextPageToken").asText("");
-    } while (!pageToken.isBlank());
+    List<String> candidateIds = listMessageIds(mailbox, token, gmailSearchQuery(expectedAccount));
+    // Some forwarded bank alerts are not indexed by Gmail's bank/sender
+    // query. Bound the fallback to recent mail so a malformed mailbox cannot
+    // turn every poll into an unbounded raw-MIME download.
+    if (candidateIds.isEmpty()) candidateIds = listMessageIds(mailbox, token, "newer_than:30d");
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -210,6 +201,23 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     Set<String> known = transactions.findByProviderMessageIdIn(candidateIds).stream()
         .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
     return fetchNewMessages(mailbox, token, candidateIds, known);
+  }
+
+  private List<String> listMessageIds(String mailbox, String token, String query) {
+    List<String> ids = new ArrayList<>();
+    String pageToken = "";
+    do {
+      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100";
+      if (query != null && !query.isBlank()) url += "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
+      if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
+      JsonNode list = get(url, token);
+      for (JsonNode item : list.path("messages")) {
+        String id = item.path("id").asText("");
+        if (!id.isBlank()) ids.add(id);
+      }
+      pageToken = list.path("nextPageToken").asText("");
+    } while (!pageToken.isBlank());
+    return new ArrayList<>(new LinkedHashSet<>(ids));
   }
 
   /** Fetches messages added after a Gmail history cursor for Pub/Sub delivery. */
@@ -272,11 +280,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    // Gmail search/indexing is unreliable for forwarded and MIME/HTML bank
-    // alerts. Scan the mailbox with pagination, then enforce the receiving
-    // account on each decoded raw message below. There is intentionally no
-    // unread/state predicate.
-    return "";
+    // Match ordinary Sacombank alerts first. A bounded recent-mail fallback
+    // handles forwarded/MIME messages that Gmail does not index by sender or
+    // subject; receiving-account validation remains local and fail-closed.
+    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn)";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
