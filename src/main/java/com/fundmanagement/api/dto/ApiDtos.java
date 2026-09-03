@@ -112,5 +112,5 @@ public final class ApiDtos {
   public record LegacyMigrationPreviewResponse(boolean dryRun, boolean applyEnabled, long memberCount, long duePeriodCount, long paymentCount, String message) {}
   public record GmailOAuthStartResponse(String authorizationUrl, Instant expiresAt) {}
   public record GmailOAuthCallbackResponse(boolean connected, String message) {}
-  public record GmailOAuthStatusResponse(boolean configured, boolean connected, String monitoredMailbox, String senderFilter, Instant connectedAt, String mode) {}
+  public record GmailOAuthStatusResponse(boolean configured, boolean connected, String monitoredMailbox, String senderFilter, Instant connectedAt, String mode, String refreshStatus, Instant lastRefreshAt, Instant lastRefreshFailureAt, String lastRefreshErrorCode) {}
 }

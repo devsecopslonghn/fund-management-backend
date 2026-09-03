@@ -15,4 +15,8 @@ public class GmailCredentialDocument {
   public List<String> scopes = new ArrayList<>();
   public Instant connectedAt;
   public String connectedBy;
+  /** Operational state only; never contains token material or provider payloads. */
+  public Instant lastRefreshAt;
+  public Instant lastRefreshFailureAt;
+  public String lastRefreshErrorCode;
 }

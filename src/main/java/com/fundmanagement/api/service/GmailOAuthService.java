@@ -21,6 +21,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -32,6 +34,7 @@ import org.springframework.stereotype.Service;
 public class GmailOAuthService {
   public static final String READ_ONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
   private static final String CREDENTIAL_ID = "singleton";
+  private static final Logger log = LoggerFactory.getLogger(GmailOAuthService.class);
   private final GmailProperties properties; private final GmailTokenCrypto crypto; private final GmailOAuthStateRepository states; private final GmailCredentialRepository credentials; private final MongoTemplate mongo; private final AuditService audit; private final ObjectMapper mapper; private final HttpClient http; private final SecureRandom random = new SecureRandom();
   public GmailOAuthService(GmailProperties properties, GmailTokenCrypto crypto, GmailOAuthStateRepository states, GmailCredentialRepository credentials, MongoTemplate mongo, AuditService audit, ObjectMapper mapper) { this.properties = properties; this.crypto = crypto; this.states = states; this.credentials = credentials; this.mongo = mongo; this.audit = audit; this.mapper = mapper; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
 
@@ -52,7 +55,7 @@ public class GmailOAuthService {
     String refreshToken = token.get("refresh_token"); if (refreshToken == null || refreshToken.isBlank()) throw new IllegalStateException("Google did not return a refresh token; reconnect with consent");
     String accessToken = token.get("access_token"); if (accessToken == null || accessToken.isBlank()) throw new IllegalStateException("Google did not return an access token");
     String mailbox = verifyMailbox(accessToken);
-    GmailCredentialDocument credential = new GmailCredentialDocument(); credential.id = CREDENTIAL_ID; credential.encryptedRefreshToken = crypto.encrypt(refreshToken, properties.getTokenEncryptionKey()); credential.mailbox = mailbox; credential.scopes = List.of(READ_ONLY_SCOPE); credential.connectedAt = Instant.now(); credential.connectedBy = state.actor; credentials.save(credential);
+    GmailCredentialDocument credential = new GmailCredentialDocument(); credential.id = CREDENTIAL_ID; credential.encryptedRefreshToken = crypto.encrypt(refreshToken, properties.getTokenEncryptionKey()); credential.mailbox = mailbox; credential.scopes = List.of(READ_ONLY_SCOPE); credential.connectedAt = Instant.now(); credential.connectedBy = state.actor; credential.lastRefreshAt = null; credential.lastRefreshFailureAt = null; credential.lastRefreshErrorCode = null; credentials.save(credential);
     audit.record(state.actor, "GMAIL_CONNECTED", "gmail_credential", CREDENTIAL_ID, Map.of(), Map.of("mailbox", mailbox, "scope", READ_ONLY_SCOPE));
     return new ApiDtos.GmailOAuthCallbackResponse(true, "Gmail read-only connection established");
   }
@@ -68,14 +71,29 @@ public class GmailOAuthService {
 
   public ApiDtos.GmailOAuthStatusResponse status() {
     boolean configured = isConfigured(); var credential = credentials.findById(CREDENTIAL_ID);
-    return new ApiDtos.GmailOAuthStatusResponse(configured, configured && credential.isPresent(), properties.getMonitoredMailbox(), properties.getSenderFilter(), credential.map(c -> c.connectedAt).orElse(null), configured ? "gmail-read-only" : "disabled");
+    GmailCredentialDocument value = credential.orElse(null);
+    String refreshStatus = value == null ? "NOT_CONNECTED" : value.lastRefreshFailureAt != null ? "FAILED" : value.lastRefreshAt != null ? "HEALTHY" : "UNKNOWN";
+    return new ApiDtos.GmailOAuthStatusResponse(configured, configured && value != null, properties.getMonitoredMailbox(), properties.getSenderFilter(), value == null ? null : value.connectedAt, configured ? "gmail-read-only" : "disabled", refreshStatus, value == null ? null : value.lastRefreshAt, value == null ? null : value.lastRefreshFailureAt, value == null ? null : value.lastRefreshErrorCode);
   }
 
   public void disconnect(String actor) { if (credentials.existsById(CREDENTIAL_ID)) { credentials.deleteById(CREDENTIAL_ID); audit.record(actor, "GMAIL_DISCONNECTED", "gmail_credential", CREDENTIAL_ID, Map.of("connected", true), Map.of("connected", false)); } }
 
   public String accessToken() {
     requireConfigured(); GmailCredentialDocument credential = credentials.findById(CREDENTIAL_ID).orElseThrow(() -> new IllegalStateException("Gmail is not connected"));
-    String refresh = crypto.decrypt(credential.encryptedRefreshToken, properties.getTokenEncryptionKey()); Map<String, String> token = postForm(properties.getTokenEndpoint(), Map.of("client_id", properties.getClientId(), "client_secret", properties.getClientSecret(), "refresh_token", refresh, "grant_type", "refresh_token")); String access = token.get("access_token"); if (access == null || access.isBlank()) throw new IllegalStateException("Gmail access token refresh failed"); return access;
+    try {
+      String refresh = crypto.decrypt(credential.encryptedRefreshToken, properties.getTokenEncryptionKey());
+      Map<String, String> token = postForm(properties.getTokenEndpoint(), Map.of("client_id", properties.getClientId(), "client_secret", properties.getClientSecret(), "refresh_token", refresh, "grant_type", "refresh_token"));
+      String access = token.get("access_token");
+      if (access == null || access.isBlank()) throw new GmailOAuthFailure("Google did not return an access token", "missing_access_token");
+      String rotatedRefresh = token.get("refresh_token");
+      if (rotatedRefresh != null && !rotatedRefresh.isBlank()) credential.encryptedRefreshToken = crypto.encrypt(rotatedRefresh, properties.getTokenEncryptionKey());
+      credential.lastRefreshAt = Instant.now(); credential.lastRefreshFailureAt = null; credential.lastRefreshErrorCode = null; credentials.save(credential);
+      return access;
+    } catch (GmailOAuthFailure failure) {
+      recordRefreshFailure(credential, failure.errorCode()); throw failure;
+    } catch (RuntimeException failure) {
+      recordRefreshFailure(credential, classifyFailure(failure)); throw failure;
+    }
   }
 
   private GmailOAuthStateDocument consumeState(String value) {
@@ -86,7 +104,38 @@ public class GmailOAuthService {
   }
   private Map<String, String> exchangeCode(String code, String verifier) { return postForm(properties.getTokenEndpoint(), Map.of("client_id", properties.getClientId(), "client_secret", properties.getClientSecret(), "code", code, "code_verifier", verifier, "redirect_uri", properties.getRedirectUri(), "grant_type", "authorization_code")); }
   private Map<String, String> postForm(String endpoint, Map<String, String> values) {
-    try { HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint)).timeout(Duration.ofSeconds(15)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(form(values))).build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); JsonNode body = mapper.readTree(response.body()); if (response.statusCode() / 100 != 2 || body == null || body.has("error")) throw new IllegalStateException("Google OAuth request failed"); java.util.HashMap<String, String> result = new java.util.HashMap<>(); body.fields().forEachRemaining(entry -> { if (entry.getValue().isTextual()) result.put(entry.getKey(), entry.getValue().textValue()); }); return result; } catch (java.io.IOException ex) { throw new IllegalStateException("Google OAuth request failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Google OAuth request failed", ex); } catch (IllegalArgumentException ex) { throw new IllegalStateException("Google OAuth request failed", ex); }
+    try {
+      HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint)).timeout(Duration.ofSeconds(15)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(form(values))).build();
+      HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+      JsonNode body;
+      try { body = mapper.readTree(response.body()); }
+      catch (java.io.IOException parseFailure) { throw new GmailOAuthFailure("Google OAuth returned an invalid response", "invalid_response"); }
+      if (response.statusCode() / 100 != 2 || body == null || body.has("error")) {
+        String errorCode = body == null ? "invalid_response" : body.path("error").asText("");
+        if (errorCode.isBlank()) errorCode = "http_" + response.statusCode();
+        log.warn("Google OAuth token request failed status={} errorCode={}", response.statusCode(), errorCode);
+        throw new GmailOAuthFailure("Google OAuth request failed: " + errorCode, errorCode);
+      }
+      java.util.HashMap<String, String> result = new java.util.HashMap<>(); body.fields().forEachRemaining(entry -> { if (entry.getValue().isTextual()) result.put(entry.getKey(), entry.getValue().textValue()); }); return result;
+    } catch (GmailOAuthFailure failure) { throw failure;
+    } catch (java.io.IOException ex) { log.warn("Google OAuth token request failed before response: {}", ex.getClass().getSimpleName()); throw new GmailOAuthFailure("Google OAuth request failed: transport", "transport");
+    } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new GmailOAuthFailure("Google OAuth request interrupted", "interrupted");
+    } catch (IllegalArgumentException ex) { throw new GmailOAuthFailure("Google OAuth request failed: invalid_endpoint", "invalid_endpoint"); }
+  }
+  private void recordRefreshFailure(GmailCredentialDocument credential, String errorCode) {
+    credential.lastRefreshFailureAt = Instant.now(); credential.lastRefreshErrorCode = errorCode;
+    try { credentials.save(credential); } catch (RuntimeException saveFailure) { log.warn("Unable to persist Gmail OAuth refresh failure state: {}", saveFailure.getClass().getSimpleName()); }
+  }
+  private String classifyFailure(RuntimeException failure) {
+    String message = failure.getMessage();
+    if (message == null || message.isBlank()) return "refresh_failed";
+    if (message.contains("token decryption")) return "token_decryption_failed";
+    return "refresh_failed";
+  }
+  private static final class GmailOAuthFailure extends IllegalStateException {
+    private final String errorCode;
+    private GmailOAuthFailure(String message, String errorCode) { super(message); this.errorCode = errorCode == null || errorCode.isBlank() ? "oauth_failed" : errorCode; }
+    private String errorCode() { return errorCode; }
   }
   private String verifyMailbox(String accessToken) {
     try { String encoded = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8); HttpRequest request = HttpRequest.newBuilder(URI.create(properties.getApiBaseUrl() + "/users/" + encoded + "/profile")).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + accessToken).GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail mailbox verification failed"); JsonNode body = mapper.readTree(response.body()); String email = body.path("emailAddress").asText(""); if (email.isBlank() || !email.equalsIgnoreCase(properties.getMonitoredMailbox())) throw new IllegalStateException("OAuth account does not match monitored mailbox"); return email; } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail mailbox verification failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail mailbox verification failed", ex); } catch (IllegalArgumentException ex) { throw new IllegalStateException("Gmail mailbox verification failed", ex); }
