@@ -19,10 +19,9 @@ import java.util.Base64;
 import org.junit.jupiter.api.Test;
 
 class GmailMailboxIngestionPortTest {
-  @Test void searchUsesBankIdentityAndLeavesAccountFilteringToDecodedMessage() {
+  @Test void searchLeavesBankAndAccountFilteringToDecodedMessage() {
     String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
-    assertThat(query).contains("Sacombank", "Ngân hàng TMCP Sài Gòn Thương Tín", "from:sacombank.com.vn");
-    assertThat(query).doesNotContain("000123456");
+    assertThat(query).isBlank();
     assertThat(query).doesNotContainIgnoringCase("unread");
   }
 

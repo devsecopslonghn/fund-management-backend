@@ -189,11 +189,12 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String token = oauth.accessToken(); String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
-    String query = URLEncoder.encode(gmailSearchQuery(expectedAccount), StandardCharsets.UTF_8);
+    String query = gmailSearchQuery(expectedAccount);
     List<String> candidateIds = new ArrayList<>();
     String pageToken = "";
     do {
-      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" + query;
+      String url = properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100";
+      if (!query.isBlank()) url += "&q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
       if (!pageToken.isBlank()) url += "&pageToken=" + URLEncoder.encode(pageToken, StandardCharsets.UTF_8);
       JsonNode list = get(url, token);
       for (JsonNode item : list.path("messages")) {
@@ -271,11 +272,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    // Gmail does not reliably index account numbers embedded in MIME/HTML
-    // with separators. Search only the bank identity, then enforce the
-    // configured receiving account on each decoded raw message below. There
-    // is intentionally no unread/state predicate.
-    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn)";
+    // Gmail search/indexing is unreliable for forwarded and MIME/HTML bank
+    // alerts. Scan the mailbox with pagination, then enforce the receiving
+    // account on each decoded raw message below. There is intentionally no
+    // unread/state predicate.
+    return "";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
