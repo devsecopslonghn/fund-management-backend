@@ -249,7 +249,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     List<MailboxMessage> messages = new ArrayList<>();
     for (String id : ids) if (!known.contains(id)) {
       String raw = rawMessage(mailbox, id, token);
-      messages.add(new MailboxMessage(id, raw));
+      // Gmail search can match a thread because another message in that
+      // thread contains the configured account. Re-check each expanded raw
+      // message before handing it to ingestion.
+      if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
     }
     return messages;
   }
@@ -258,6 +261,21 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     JsonNode thread = get(url, token); List<String> ids = new ArrayList<>();
     for (JsonNode message : thread.path("messages")) { String id = message.path("id").asText(""); if (!id.isBlank()) ids.add(id); }
     return ids;
+  }
+  private boolean isConfiguredReceivingAlert(String raw) {
+    String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
+    if (expected.isBlank()) return false;
+    try {
+      SacombankMessageParser.ParsedBankMessage parsed = parser.parse(raw);
+      String actual = parsed.accountNumber() == null ? "" : parsed.accountNumber().replaceAll("\\D", "");
+      if (expected.equals(actual)) return true;
+    } catch (RuntimeException ignored) { }
+    String normalized = SacombankMessageText.readablePayload(raw)
+        .replaceAll("(?s)<[^>]*>", " ")
+        .replaceAll("&#x([0-9a-fA-F]+);", " ")
+        .replaceAll("&#([0-9]+);", " ")
+        .replaceAll("\\D", "");
+    return normalized.contains(expected);
   }
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");

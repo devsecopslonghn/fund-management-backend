@@ -30,6 +30,47 @@ class GmailMailboxIngestionPortTest {
         .isInstanceOf(IllegalArgumentException.class);
   }
 
+  @Test void filtersMessagesExpandedFromAThreadUsingDecodedReceivingAccount() throws Exception {
+    HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+    String incoming = "MIME-Version: 1.0\r\n"
+        + "Content-Type: text/plain; charset=UTF-8\r\n"
+        + "Content-Transfer-Encoding: base64\r\n\r\n"
+        + Base64.getEncoder().encodeToString("Account: 066007102000\nAmount: + 100,000 VND\n".getBytes(StandardCharsets.UTF_8));
+    String unrelated = "MIME-Version: 1.0\r\n"
+        + "Content-Type: text/plain; charset=UTF-8\r\n"
+        + "Content-Transfer-Encoding: base64\r\n\r\n"
+        + Base64.getEncoder().encodeToString("Account: 044007102000\nAmount: + 100,000 VND\n".getBytes(StandardCharsets.UTF_8));
+    server.createContext("/gmail/v1", exchange -> {
+      String path = exchange.getRequestURI().getPath();
+      if (path.endsWith("/messages")) respond(exchange, "{\"messages\":[{\"id\":\"message-in\",\"threadId\":\"thread-1\"}]}");
+      else if (path.endsWith("/threads/thread-1")) respond(exchange, "{\"messages\":[{\"id\":\"message-in\"},{\"id\":\"message-unrelated\"}]}");
+      else if (path.endsWith("/messages/message-in")) respond(exchange, raw(incoming));
+      else if (path.endsWith("/messages/message-unrelated")) respond(exchange, raw(unrelated));
+      else respond(exchange, "{}");
+    });
+    server.start();
+    try {
+      GmailProperties properties = new GmailProperties();
+      properties.setEnabled(true); properties.setMonitoredMailbox("fund@example.test");
+      properties.setApiBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/gmail/v1");
+      GmailOAuthService oauth = mock(GmailOAuthService.class); when(oauth.accessToken()).thenReturn("access-token");
+      SettingsService settings = mock(SettingsService.class);
+      when(settings.get()).thenReturn(new ApiDtos.SettingsResponse(100_000, 0.85, "Sacombank", "9704",
+          "066007102000", "Fund", false, false, true, true, "bank@example.test", false, "", 587, ""));
+      BankTransactionRepository transactions = mock(BankTransactionRepository.class);
+      when(transactions.findByProviderMessageIdIn(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(java.util.List.of());
+      GmailMailboxIngestionPort port = new GmailMailboxIngestionPort(properties, oauth, new ObjectMapper(),
+          settings, transactions, new BasicSacombankMessageParser());
+
+      var result = port.fetchSacombankMessages();
+
+      assertThat(result).extracting(MailboxIngestionPort.MailboxMessage::providerMessageId)
+          .containsExactly("message-in");
+    } finally {
+      server.stop(0);
+    }
+  }
+
   @Test void diagnosticReadsOneThreadWithoutReturningRawMimeAndRedactsAccountAndEmail() throws Exception {
     HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
     String incoming = "MIME-Version: 1.0\r\n"
