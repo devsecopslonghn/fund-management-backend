@@ -56,7 +56,8 @@ public class DuesService {
   public ApiDtos.GenerationResult generate(String month) {
     parseMonth(month); int created = 0, skipped = 0;
     for (MemberDocument member : members.findByStatus(MemberStatus.ACTIVE)) {
-      if (month.compareTo(member.baselineMonth) < 0 || dues.findByMemberIdAndMonth(member.id, month).isPresent()) { skipped++; continue; }
+      if (month.compareTo(member.baselineMonth) < 0) { skipped++; continue; }
+      if (dues.findByMemberIdAndMonth(member.id, month).isPresent()) { skipped++; refreshAllocations(member); continue; }
       DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = month; due.amountDue = memberService.rateFor(member, month); due.amountPaid = initiallyPaid(member, month) ? due.amountDue : 0; due.status = status(due);
       // New payment flows identify the payer by the stable member code. Keep
       // the legacy reference service injectable so old data can still be

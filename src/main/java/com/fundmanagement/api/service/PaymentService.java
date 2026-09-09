@@ -139,13 +139,13 @@ public class PaymentService {
           .filter(allocation -> intentPaymentIds.contains(allocation.paymentId))
           .mapToLong(allocation -> allocation.amount).sum();
       long unattributedForDue = Math.max(0, due.amountPaid - fifoPaid - intentPaid);
-      if (due.notes == null || due.notes.isBlank()) {
+      if (isAnonymousPaid(due)) {
         unattributedPaid = Math.addExact(unattributedPaid, unattributedForDue);
         due.amountPaid = intentPaid;
       } else {
         due.amountPaid = Math.max(0, due.amountPaid - fifoPaid);
       }
-      if (due.notes == null || due.notes.isBlank()) {
+      if (isAnonymousPaid(due)) {
         long expectedAmount = members.rateFor(member, due.month);
         due.amountDue = expectedAmount;
       }
@@ -217,6 +217,17 @@ public class PaymentService {
       DuePeriodDocument last = periods.get(periods.size() - 1);
       last.amountPaid = Math.addExact(last.amountPaid, remaining);
     }
+  }
+
+  /**
+   * Paid values without a ledger allocation are historical projections, not
+   * separate bank payments. The explicit seed marker wins over notes because
+   * notes are descriptive metadata and may be present on imported plan rows.
+   * Blank notes remain the backward-compatible fallback for older documents
+   * created before seededPaid was introduced.
+   */
+  private boolean isAnonymousPaid(DuePeriodDocument due) {
+    return due.seededPaid || due.notes == null || due.notes.isBlank();
   }
 
   private String dueSummary(DuePeriodDocument due) {

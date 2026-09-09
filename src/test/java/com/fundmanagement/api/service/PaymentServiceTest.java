@@ -181,6 +181,26 @@ class PaymentServiceTest {
     assertThat(periods.get(8).amountPaid).isEqualTo(200_000);
     assertThat(periods.get(9).amountPaid).isZero();
   }
+  @Test void seededPartialsAreConsolidatedEvenWhenTheImportedRowHasNotes() {
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    DuePeriodDocument september = due("september", "2026-09", 200_000, 100_000);
+    DuePeriodDocument october = due("october", "2026-10", 200_000, 100_000);
+    september.seededPaid = true; october.seededPaid = true;
+    september.notes = "Imported master plan"; october.notes = "Imported master plan";
+    List<DuePeriodDocument> periods = new ArrayList<>(List.of(september, october));
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(periods);
+    when(payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc("member-1")).thenReturn(List.of());
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    when(members.rateFor(org.mockito.ArgumentMatchers.same(member), org.mockito.ArgumentMatchers.anyString())).thenReturn(200_000L);
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    service.reallocateMemberPayments(member, "system", "Normalize seeded plan payments");
+
+    assertThat(september.amountPaid).isEqualTo(200_000);
+    assertThat(september.status).isEqualTo(DueStatus.PAID);
+    assertThat(october.amountPaid).isZero();
+    assertThat(october.status).isEqualTo(DueStatus.UNPAID);
+  }
   private ManualPaymentDocument payment(String id, long amount) {
     ManualPaymentDocument payment = new ManualPaymentDocument(); payment.id = id; payment.memberId = "member-1"; payment.amount = amount; payment.unallocatedAmount = amount; payment.occurredAt = Instant.parse("2026-01-01T00:00:00Z"); payment.createdAt = payment.occurredAt; return payment;
   }

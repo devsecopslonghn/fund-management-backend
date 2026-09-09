@@ -35,6 +35,7 @@ class DuesServiceTest {
   @Mock PaymentReferenceService paymentReferences;
   @Mock GmailPollingWorker gmailPollingWorker;
   @Mock TaskExecutor taskExecutor;
+  @Mock PaymentService paymentService;
 
   @Test void generatesOneDueForEligibleActiveMemberAndSkipsExistingPeriod() {
     MemberDocument first = member("m-1", "2026-07"); MemberDocument second = member("m-2", "2026-09");
@@ -62,6 +63,21 @@ class DuesServiceTest {
     assertThat(result.requiresMemberCode()).isTrue();
     assertThat(result.matches()).extracting(ApiDtos.PublicMemberMatch::memberCode).containsExactly("A001", "A002");
     assertThat(result.duePeriods()).isEmpty();
+  }
+
+  @Test void existingDueStillRefreshesPaymentProjectionDuringGeneration() {
+    MemberDocument member = member("m-existing", "2026-07");
+    DuePeriodDocument existing = due("due-existing", "2026-08", 100_000, 100_000);
+    when(members.findByStatus(MemberStatus.ACTIVE)).thenReturn(List.of(member));
+    when(dues.findByMemberIdAndMonth("m-existing", "2026-08")).thenReturn(Optional.of(existing));
+    DuesService service = new DuesService(members, dues, intents, memberService, new FundProperties());
+    service.setPaymentService(paymentService);
+
+    ApiDtos.GenerationResult result = service.generate("2026-08");
+
+    assertThat(result.created()).isZero();
+    assertThat(result.skipped()).isEqualTo(1);
+    verify(paymentService).reallocateMemberPayments(member, "system:dues", "Due period generation or plan materialization");
   }
 
   @Test void anonymousLookupReturnsOnlyOutstandingDuePeriods() {
