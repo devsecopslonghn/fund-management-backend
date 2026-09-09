@@ -194,10 +194,17 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
     JsonNode list = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=10&q=" +
         URLEncoder.encode("newer_than:3d", StandardCharsets.UTF_8), token);
-    List<GmailRecentMessageMetadata> result = new ArrayList<>();
+    List<String> ids = new ArrayList<>();
     for (JsonNode item : list.path("messages")) {
       String id = item.path("id").asText("");
-      if (id.isBlank()) continue;
+      if (!id.isBlank()) ids.add(id);
+    }
+    return ids.parallelStream().map(id -> recentMessageMetadata(mailbox, token, id))
+        .filter(java.util.Objects::nonNull).toList();
+  }
+
+  private GmailRecentMessageMetadata recentMessageMetadata(String mailbox, String token, String id) {
+    try {
       JsonNode message = get(messageUrl(mailbox, id, "metadata") + "&metadataHeaders=From&metadataHeaders=Subject", token);
       Instant internalDate = message.path("internalDate").asText("").isBlank() ? null :
           Instant.ofEpochMilli(Long.parseLong(message.path("internalDate").asText()));
@@ -207,9 +214,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
         if ("From".equalsIgnoreCase(name)) from = header.path("value").asText("");
         if ("Subject".equalsIgnoreCase(name)) subject = header.path("value").asText("");
       }
-      result.add(new GmailRecentMessageMetadata(id, internalDate, from, subject));
+      return new GmailRecentMessageMetadata(id, internalDate, from, subject);
+    } catch (RuntimeException failure) {
+      log.warn("Gmail recent metadata probe failed providerId={} reason={}", id, failure.getMessage());
+      return null;
     }
-    return List.copyOf(result);
   }
 
   private String providerId(String value) {
