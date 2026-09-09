@@ -268,6 +268,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     List<MailboxMessage> messages = new ArrayList<>();
     int rawFetched = 0;
     int rejected = 0;
+    int rejectionDiagnostics = 0;
     for (String id : ids) if (!known.contains(id)) {
       String raw = rawMessage(mailbox, id, token);
       rawFetched++;
@@ -275,10 +276,17 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       // thread contains the configured account. Re-check each expanded raw
       // message before handing it to ingestion.
       if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
-      else rejected++;
+      else { rejected++; if (rejectionDiagnostics++ < 5) logRejectedDiagnostic(id, raw); }
     }
     return new FetchResult(List.copyOf(messages), rawFetched, rejected);
   }
+  private void logRejectedDiagnostic(String id, String raw) {
+    try {
+      var parsed = parser.parse(raw); String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", ""); String actual = parsed.accountNumber() == null ? "" : parsed.accountNumber().replaceAll("\\D", "");
+      log.warn("Gmail candidate rejected providerId={} rawLength={} parserAccountDigits={} accountMatches={} amountRecognized={} direction={} hasAccountLabel={} hasTransactionLabel={} hasDescriptionLabel={}", id, raw == null ? 0 : raw.length(), actual.length(), expected.equals(actual), parsed.amount() > 0, parsed.direction(), containsLabel(raw, "account", "tài khoản"), containsLabel(raw, "transaction", "phát sinh", "amount", "số tiền"), containsLabel(raw, "description", "nội dung", "diễn giải"));
+    } catch (RuntimeException failure) { log.warn("Gmail candidate rejected providerId={} rawLength={} parserError={}", id, raw == null ? 0 : raw.length(), failure.getMessage()); }
+  }
+  private boolean containsLabel(String raw, String... labels) { String value = raw == null ? "" : raw.toLowerCase(java.util.Locale.ROOT); for (String label : labels) if (value.contains(label)) return true; return false; }
   private boolean isConfiguredReceivingAlert(String raw) {
     String expected = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expected.isBlank()) return false;
