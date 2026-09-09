@@ -20,6 +20,13 @@ class BasicSacombankMessageParserTest {
     assertThat(result.availableBalance()).isEqualTo(900_000L); assertThat(result.parsedContent()).isEqualTo("QUY A001 082026");
     assertThat(result.occurredAt()).isEqualTo(java.time.Instant.parse("2026-08-24T07:30:00Z"));
   }
+
+  @Test void parsesVietnameseTransactionAmountLabels() {
+    var result = parser.parse("Tài khoản thụ hưởng: 0660000000\nSố tiền giao dịch: + 250.000 VNĐ\nNội dung: QUY A001");
+    assertThat(result.accountNumber()).isEqualTo("0660000000");
+    assertThat(result.amount()).isEqualTo(250_000L);
+    assertThat(result.direction()).isEqualTo("IN");
+  }
   @Test void decodesSacombankHtmlMimeAlertBeforeParsing() {
     var raw = "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"fund\"\r\n\r\n"
         + "--fund\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n"
