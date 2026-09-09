@@ -58,7 +58,9 @@ public class IngestionService {
   private boolean sameAccount(String actual, String expected) { String left = normalizeDigits(actual); String right = normalizeDigits(expected); return left != null && right != null && !right.isBlank() && right.equals(left); }
   private void reparse(BankTransactionDocument tx) {
     try { applyParsed(tx, parser.parse(tx.rawPayload)); transactions.save(tx); }
-    catch (IllegalArgumentException ignored) { /* Keep the existing record for admin review. */ }
+    catch (IllegalArgumentException failure) {
+      log.warn("Bank transaction reparse failed providerId={} reason={}", tx.providerMessageId, failure.getMessage());
+    }
   }
   private void applyParsed(BankTransactionDocument tx, SacombankMessageParser.ParsedBankMessage parsed) {
     String expected = settings.get().accountNumber();

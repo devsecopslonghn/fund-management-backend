@@ -287,7 +287,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       // Gmail search can match a thread because another message in that
       // thread contains the configured account. Re-check each expanded raw
       // message before handing it to ingestion.
-      if (isConfiguredReceivingAlert(raw)) messages.add(new MailboxMessage(id, raw));
+      if (isConfiguredReceivingAlert(raw)) {
+        log.info("Gmail candidate accepted providerId={} rawLength={}", id, raw == null ? 0 : raw.length());
+        messages.add(new MailboxMessage(id, raw));
+      }
       else { rejected++; if (rejectionDiagnostics++ < 5) logRejectedDiagnostic(id, raw); }
     }
     return new FetchResult(List.copyOf(messages), rawFetched, rejected);
