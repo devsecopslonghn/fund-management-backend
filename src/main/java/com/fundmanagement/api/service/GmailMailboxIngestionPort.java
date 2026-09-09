@@ -192,8 +192,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   public List<GmailRecentMessageMetadata> recentMessageMetadata() {
     String token = oauth.accessToken();
     String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
-    JsonNode list = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=10&q=" +
-        URLEncoder.encode("newer_than:3d", StandardCharsets.UTF_8), token);
+    String sender = properties.getSenderFilter();
+    String query = sender == null || sender.isBlank() ? "newer_than:3d" : "newer_than:3d from:" + sender.trim();
+    JsonNode list = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=25&q=" +
+        URLEncoder.encode(query, StandardCharsets.UTF_8), token);
     List<String> ids = new ArrayList<>();
     for (JsonNode item : list.path("messages")) {
       String id = item.path("id").asText("");
