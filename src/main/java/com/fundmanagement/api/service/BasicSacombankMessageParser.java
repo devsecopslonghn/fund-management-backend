@@ -16,8 +16,9 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
   private static final Pattern ACCOUNT = Pattern.compile("(?:account(?:\\s*(?:number|no\\.?))?|tài khoản(?:\\s+(?:thụ hưởng|nhận|đích|giao dịch))?|số tk|so tk)\\s*[:=|]?\\s*([0-9][0-9 .-]{9,30})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
   /** VIB transfer alerts contain both source and destination accounts; the destination is the receiving account. */
   private static final Pattern DESTINATION_ACCOUNT = Pattern.compile("(?:đến tài khoản|to account|destination account)\\s*[:=|]?\\s*([0-9][0-9 .-]{9,30})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-  private static final Pattern LABELED_AMOUNT = Pattern.compile("(?:amount|số tiền(?:\\s+giao dịch)?|transaction amount|transaction|phát sinh|credit amount|debit amount|ghi có|ghi nợ)\\s*[:=|]?\\s*([+-]?)\\s*([0-9][0-9.,]*)\\s*(?:VND|VNĐ|đ|đồng)?", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+  private static final Pattern LABELED_AMOUNT = Pattern.compile("(?:amount|số tiền(?:\\s+giao dịch)?|transaction amount|transaction|phát sinh|credit amount|debit amount|ghi có|ghi nợ)[^0-9+\\-]{0,60}([+-]?)\\s*([0-9][0-9.,]*)\\s*(?:VND|VNĐ|đ|đồng)?", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
   private static final Pattern SIGNED_AMOUNT = Pattern.compile("([+-])\\s*([0-9][0-9.,]*)\\s*(?:VND|VNĐ|đ|đồng)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+  private static final Pattern PREFIX_CURRENCY_AMOUNT = Pattern.compile("(?:VND|VNĐ)\\s*([+-]?)\\s*([0-9][0-9.,]*)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
   private static final Pattern CONTENT = Pattern.compile("(?:content|nội dung|description|diễn giải)\\s*[:=]?\\s*([^\\r\\n<;]{1,500})", Pattern.CASE_INSENSITIVE);
   private static final Pattern TIME = Pattern.compile("(?:occurredAt|transaction time|thời gian|date|ngày(?: giờ)?)\\s*[:=]?\\s*([^\\r\\n<;]{1,80})", Pattern.CASE_INSENSITIVE);
   private static final Pattern VIB_TIME_LABEL = Pattern.compile("(?:ngày giao dịch|transaction date)\\s*[:=]?\\s*([^\\r\\n<;]{1,80})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
@@ -48,6 +49,7 @@ public class BasicSacombankMessageParser implements SacombankMessageParser {
     String sign = null; String amountText = null;
     if (labeled.find()) { sign = labeled.group(1); amountText = labeled.group(2); }
     else if (signed.find()) { sign = signed.group(1); amountText = signed.group(2); }
+    else { Matcher prefixed = PREFIX_CURRENCY_AMOUNT.matcher(raw); if (prefixed.find()) { sign = prefixed.group(1); amountText = prefixed.group(2); } }
     long amount = number(amountText); if (amount <= 0) throw new IllegalArgumentException("Bank amount was not recognized");
     String lower = raw.toLowerCase(Locale.ROOT);
     String direction = "-".equals(sign) || lower.contains("direction=out") || lower.contains("outgoing") || lower.contains("ghi nợ") ? "OUT" : "IN";
