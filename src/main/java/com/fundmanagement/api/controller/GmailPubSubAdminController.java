@@ -27,5 +27,9 @@ public class GmailPubSubAdminController {
       @RequestParam(required = false) String messageId, @RequestParam(required = false) String threadId) {
     return mailbox.diagnosticMessages(messageId, threadId);
   }
+  @GetMapping("/diagnostic-recent-metadata")
+  public java.util.List<GmailMailboxIngestionPort.GmailRecentMessageMetadata> recentMetadata() {
+    return mailbox.recentMessageMetadata();
+  }
   public record GmailWatchResponse(String topicName, String historyId, java.time.Instant expirationAt) {}
 }

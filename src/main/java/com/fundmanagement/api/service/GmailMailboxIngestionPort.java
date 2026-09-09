@@ -90,6 +90,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   public record GmailMimePart(String path, String contentType, String charset,
       String transferEncoding, String disposition, int declaredSize) {}
 
+  public record GmailRecentMessageMetadata(String messageId, Instant internalDate,
+      String from, String subject) {}
+
   private record GmailMessageMetadata(String threadId, Instant gmailInternalDate) {}
   private record FetchResult(List<MailboxMessage> messages, int rawFetched, int rejected) {}
 
@@ -183,6 +186,30 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String internalDate = message.path("internalDate").asText("");
     Instant timestamp = internalDate.isBlank() ? null : Instant.ofEpochMilli(Long.parseLong(internalDate));
     return new GmailMessageMetadata(threadId, timestamp);
+  }
+
+  /** Read-only metadata probe used to verify the configured sender filter. */
+  public List<GmailRecentMessageMetadata> recentMessageMetadata() {
+    String token = oauth.accessToken();
+    String mailbox = URLEncoder.encode(properties.getMonitoredMailbox(), StandardCharsets.UTF_8);
+    JsonNode list = get(properties.getApiBaseUrl() + "/users/" + mailbox + "/messages?maxResults=100&q=" +
+        URLEncoder.encode("newer_than:3d", StandardCharsets.UTF_8), token);
+    List<GmailRecentMessageMetadata> result = new ArrayList<>();
+    for (JsonNode item : list.path("messages")) {
+      String id = item.path("id").asText("");
+      if (id.isBlank()) continue;
+      JsonNode message = get(messageUrl(mailbox, id, "metadata") + "&metadataHeaders=From&metadataHeaders=Subject", token);
+      Instant internalDate = message.path("internalDate").asText("").isBlank() ? null :
+          Instant.ofEpochMilli(Long.parseLong(message.path("internalDate").asText()));
+      String from = ""; String subject = "";
+      for (JsonNode header : message.path("payload").path("headers")) {
+        String name = header.path("name").asText("");
+        if ("From".equalsIgnoreCase(name)) from = header.path("value").asText("");
+        if ("Subject".equalsIgnoreCase(name)) subject = header.path("value").asText("");
+      }
+      result.add(new GmailRecentMessageMetadata(id, internalDate, from, subject));
+    }
+    return List.copyOf(result);
   }
 
   private String providerId(String value) {
