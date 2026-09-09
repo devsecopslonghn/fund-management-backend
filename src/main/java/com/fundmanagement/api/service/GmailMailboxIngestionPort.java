@@ -295,7 +295,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
         log.info("Gmail candidate accepted providerId={} rawLength={}", id, raw == null ? 0 : raw.length());
         messages.add(new MailboxMessage(id, raw));
       }
-      else { rejected++; if (rejectionDiagnostics++ < 5) logRejectedDiagnostic(id, raw); }
+      else { rejected++; if (rejectionDiagnostics++ < 100) logRejectedDiagnostic(id, raw); }
     }
     return new FetchResult(List.copyOf(messages), rawFetched, rejected);
   }
@@ -339,7 +339,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (!sender.matches("[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+")) {
       throw new IllegalArgumentException("Configured Gmail sender filter is invalid");
     }
-    return "newer_than:30d from:" + sender;
+    return "newer_than:3d from:" + sender;
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
