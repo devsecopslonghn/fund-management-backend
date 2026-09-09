@@ -22,7 +22,7 @@ class GmailMailboxIngestionPortTest {
   @Test void gmailSearchQueryIncludesConfiguredReceivingAccount() {
     assertThat(GmailMailboxIngestionPort.gmailSearchQuery("066-007-102000")).contains("066007102000");
   }
-  @Test void searchUsesBankIdentityBeforeBoundedRecentFallback() {
+  @Test void searchUsesBoundedRecentAccountQuery() {
     String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
     assertThat(query).contains("newer_than:30d", "000123456");
     assertThat(query).doesNotContainIgnoringCase("unread");

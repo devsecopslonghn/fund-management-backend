@@ -208,6 +208,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // query can return hundreds of unrelated threaded messages and exhaust
     // Gmail API quota before the actual bank alert is inspected.
     candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
+    candidateIds.addAll(listMessageIds(mailbox, token, recentSenderQuery()));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -310,15 +311,13 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (expected.isBlank()) return false;
     try {
       SacombankMessageParser.ParsedBankMessage parsed = parser.parse(raw);
+      if (parsed.amount() <= 0 || parsed.direction() == null || parsed.direction().isBlank()) return false;
       String actual = parsed.accountNumber() == null ? "" : parsed.accountNumber().replaceAll("\\D", "");
       if (expected.equals(actual)) return true;
+      if (actual.isBlank()) return SacombankMessageText.readablePayload(raw).replaceAll("\\D", "").contains(expected);
+      return false;
     } catch (RuntimeException ignored) { }
-    String normalized = SacombankMessageText.readablePayload(raw)
-        .replaceAll("(?s)<[^>]*>", " ")
-        .replaceAll("&#x([0-9a-fA-F]+);", " ")
-        .replaceAll("&#([0-9]+);", " ")
-        .replaceAll("\\D", "");
-    return normalized.contains(expected);
+    return false;
   }
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
@@ -331,6 +330,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String dashed = digits.length() == 12 ? digits.substring(0, 3) + "-" + digits.substring(3, 6) + "-" + digits.substring(6) : digits;
     String spaced = digits.length() == 12 ? digits.substring(0, 3) + " " + digits.substring(3, 6) + " " + digits.substring(6) : digits;
     return "newer_than:30d (\"" + digits + "\" OR \"" + dashed + "\" OR \"" + spaced + "\")";
+  }
+  private static String recentSenderQuery() {
+    return "newer_than:3d (from:sacombank.com.vn OR \"SACOMBANK\")";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
