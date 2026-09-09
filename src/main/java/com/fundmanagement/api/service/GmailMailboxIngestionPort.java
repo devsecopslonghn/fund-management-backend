@@ -40,7 +40,6 @@ import org.slf4j.LoggerFactory;
 @ConditionalOnProperty(prefix = "app.gmail", name = "enabled", havingValue = "true")
 public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   private static final Logger log = LoggerFactory.getLogger(GmailMailboxIngestionPort.class);
-  private static final String RECENT_MAIL_QUERY = "newer_than:30d";
   private static final int MAX_MESSAGE_LIST_PAGES = 10;
   private final GmailProperties properties; private final GmailOAuthService oauth; private final ObjectMapper mapper; private final HttpClient http; private final SettingsService settings; private final BankTransactionRepository transactions; private final SacombankMessageParser parser;
   public GmailMailboxIngestionPort(GmailProperties properties, GmailOAuthService oauth, ObjectMapper mapper, SettingsService settings, BankTransactionRepository transactions, SacombankMessageParser parser) { this.properties = properties; this.oauth = oauth; this.mapper = mapper; this.settings = settings; this.transactions = transactions; this.parser = parser; this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(); }
@@ -208,7 +207,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // Some forwarded bank alerts are not indexed by Gmail's bank/sender
     // query. Always merge the bounded recent-mail scan; Gmail can return old
     // indexed alerts while omitting a newly forwarded MIME message.
-    candidateIds.addAll(listMessageIds(mailbox, token, RECENT_MAIL_QUERY));
+    candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -238,7 +237,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       pageToken = list.path("nextPageToken").asText("");
     } while (!pageToken.isBlank() && pages < MAX_MESSAGE_LIST_PAGES);
     if (!pageToken.isBlank()) log.warn("Gmail message listing stopped at page limit queryType={} pages={}",
-        query.equals(RECENT_MAIL_QUERY) ? "recent" : "bank", pages);
+        query.contains("newer_than:") ? "recent" : "bank", pages);
     return new ArrayList<>(new LinkedHashSet<>(ids));
   }
 
@@ -319,6 +318,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // subject; receiving-account validation remains local and fail-closed.
     return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn OR \"" + digits + "\")";
   }
+  private String recentMailQuery(String accountNumber) { String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", ""); return "newer_than:30d \"" + digits + "\""; }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
   }
