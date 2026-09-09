@@ -122,6 +122,7 @@ public class GmailOAuthService {
       }
       java.util.HashMap<String, String> result = new java.util.HashMap<>(); body.fields().forEachRemaining(entry -> { if (entry.getValue().isTextual()) result.put(entry.getKey(), entry.getValue().textValue()); }); return result;
     } catch (GmailOAuthFailure failure) { throw failure;
+    } catch (java.net.http.HttpTimeoutException ex) { log.warn("Google OAuth token request timed out"); throw new GmailOAuthFailure("Google OAuth request failed: timeout", "timeout");
     } catch (java.io.IOException ex) { log.warn("Google OAuth token request failed before response: {}", ex.getClass().getSimpleName()); throw new GmailOAuthFailure("Google OAuth request failed: transport", "transport");
     } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new GmailOAuthFailure("Google OAuth request interrupted", "interrupted");
     } catch (IllegalArgumentException ex) { throw new GmailOAuthFailure("Google OAuth request failed: invalid_endpoint", "invalid_endpoint"); }

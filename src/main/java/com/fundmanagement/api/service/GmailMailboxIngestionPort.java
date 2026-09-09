@@ -197,9 +197,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (expectedAccount.isBlank()) return List.of();
     List<String> candidateIds = listMessageIds(mailbox, token, gmailSearchQuery(expectedAccount));
     // Some forwarded bank alerts are not indexed by Gmail's bank/sender
-    // query. Use the bounded recent-mail scan only when the targeted query
-    // has no result; otherwise every poll would perform two mailbox scans.
-    if (candidateIds.isEmpty()) candidateIds = listMessageIds(mailbox, token, RECENT_MAIL_QUERY);
+    // query. Always merge the bounded recent-mail scan; Gmail can return old
+    // indexed alerts while omitting a newly forwarded MIME message.
+    candidateIds.addAll(listMessageIds(mailbox, token, RECENT_MAIL_QUERY));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -315,5 +315,5 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   private String rawMessage(String mailbox, String id, String token) {
     return new String(rawMessageBytes(mailbox, id, token), StandardCharsets.UTF_8);
   }
-  private JsonNode get(String url, String token) { try { HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail API request failed"); return mapper.readTree(response.body()); } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail API request failed", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail API request interrupted", ex); } }
+  private JsonNode get(String url, String token) { try { HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build(); HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString()); if (response.statusCode() / 100 != 2) throw new IllegalStateException("Gmail API request failed: http_" + response.statusCode()); return mapper.readTree(response.body()); } catch (java.net.http.HttpTimeoutException ex) { throw new IllegalStateException("Gmail API request failed: timeout", ex); } catch (java.io.IOException ex) { throw new IllegalStateException("Gmail API request failed: transport", ex); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new IllegalStateException("Gmail API request interrupted", ex); } }
 }

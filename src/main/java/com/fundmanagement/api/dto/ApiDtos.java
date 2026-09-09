@@ -113,4 +113,5 @@ public final class ApiDtos {
   public record GmailOAuthStartResponse(String authorizationUrl, Instant expiresAt) {}
   public record GmailOAuthCallbackResponse(boolean connected, String message) {}
   public record GmailOAuthStatusResponse(boolean configured, boolean connected, String monitoredMailbox, String senderFilter, Instant connectedAt, String mode, String refreshStatus, Instant lastRefreshAt, Instant lastRefreshFailureAt, String lastRefreshErrorCode) {}
+  public record GmailHealthResponse(String status, boolean pollingEnabled, boolean eventEnabled, String refreshStatus, Instant watchExpirationAt, boolean watchHealthy, Instant lastPollAt, Instant lastPollSuccessAt, Instant lastPollFailureAt, String lastPollError, int lastPollCandidates, int lastPollMatched, int lastPollRejected, Instant lastPushAt, Instant lastPushSuccessAt, Instant lastPushFailureAt, String lastPushError) {}
 }

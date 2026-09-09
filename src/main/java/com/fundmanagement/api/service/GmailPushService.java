@@ -32,6 +32,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /** Gmail push adapter. Polling remains the recovery path for delayed/dropped notifications. */
 @Service
@@ -50,13 +51,20 @@ public class GmailPushService {
   private final GmailCredentialRepository credentials;
   private final IngestionService ingestion;
   private final ObjectMapper mapper;
+  private final GmailIngestionHealthService health;
   private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+
+  @Autowired public GmailPushService(GmailProperties properties, GmailMailboxIngestionPort mailbox, GmailOAuthService oauth,
+      GmailWatchStateRepository watches, GmailPushEventRepository events, GmailCredentialRepository credentials,
+      IngestionService ingestion, ObjectMapper mapper) {
+    this(properties, mailbox, oauth, watches, events, credentials, ingestion, mapper, null);
+  }
 
   public GmailPushService(GmailProperties properties, GmailMailboxIngestionPort mailbox, GmailOAuthService oauth,
       GmailWatchStateRepository watches, GmailPushEventRepository events, GmailCredentialRepository credentials,
-      IngestionService ingestion, ObjectMapper mapper) {
+      IngestionService ingestion, ObjectMapper mapper, GmailIngestionHealthService health) {
     this.properties = properties; this.mailbox = mailbox; this.oauth = oauth; this.watches = watches;
-    this.events = events; this.credentials = credentials; this.ingestion = ingestion; this.mapper = mapper;
+    this.events = events; this.credentials = credentials; this.ingestion = ingestion; this.mapper = mapper; this.health = health;
   }
 
   public GmailWatchStateDocument registerWatch() {
@@ -110,6 +118,7 @@ public class GmailPushService {
 
   /** Processes a Pub/Sub push envelope. Replayed message ids are acknowledged safely. */
   public void process(JsonNode envelope) {
+    if (health != null) health.pushReceived();
     JsonNode message = envelope == null ? null : envelope.path("message");
     String messageId = message == null ? "" : message.path("messageId").asText("");
     String encodedData = message == null ? "" : message.path("data").asText("");
@@ -142,7 +151,9 @@ public class GmailPushService {
         state.lastNotificationAt = Instant.now(); watches.save(state);
       }
       event.status = "COMPLETED"; event.completedAt = Instant.now(); events.save(event);
+      if (health != null) health.pushSucceeded();
     } catch (RuntimeException failure) {
+      if (health != null) health.pushFailed(failure);
       event.status = "FAILED"; event.failureReason = safeMessage(failure); events.save(event); throw failure;
     }
   }

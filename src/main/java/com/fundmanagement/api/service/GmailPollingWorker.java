@@ -19,11 +19,11 @@ import java.util.concurrent.atomic.AtomicLong;
 @ConditionalOnProperty(prefix = "app.gmail", name = "polling-enabled", havingValue = "true")
 public class GmailPollingWorker {
   private static final Logger log = LoggerFactory.getLogger(GmailPollingWorker.class);
-  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow; private final SettingsService settings; private final TaskExecutor taskExecutor; private final AtomicLong lastBatchPollAt = new AtomicLong(0);
+  private final MailboxIngestionPort mailbox; private final IngestionService ingestion; private final GmailPollingLeaseService leaseService; private final PaymentDetectionWindowService detectionWindow; private final SettingsService settings; private final TaskExecutor taskExecutor; private final GmailIngestionHealthService health; private final AtomicLong lastBatchPollAt = new AtomicLong(0);
   /** Compatibility constructor for focused tests and deployments that do not use fast polling. */
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null, null, null); }
-  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this(mailbox, ingestion, leaseService, detectionWindow, null, null); }
-  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow, SettingsService settings, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; this.settings = settings; this.taskExecutor = taskExecutor; }
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService) { this(mailbox, ingestion, leaseService, null, null, null, null); }
+  public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow) { this(mailbox, ingestion, leaseService, detectionWindow, null, null, null); }
+  @Autowired public GmailPollingWorker(MailboxIngestionPort mailbox, IngestionService ingestion, GmailPollingLeaseService leaseService, PaymentDetectionWindowService detectionWindow, SettingsService settings, @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor, GmailIngestionHealthService health) { this.mailbox = mailbox; this.ingestion = ingestion; this.leaseService = leaseService; this.detectionWindow = detectionWindow; this.settings = settings; this.taskExecutor = taskExecutor; this.health = health; }
   /** Full mailbox reconciliation. The ten-second scheduler tick only checks the persisted interval; it does not call Gmail unless due. */
   @Scheduled(fixedDelayString = "${app.gmail.scheduler-tick-ms:10000}", initialDelayString = "${FUND_GMAIL_POLL_INITIAL_DELAY_MS:30000}")
   public void poll() {
@@ -61,15 +61,18 @@ public class GmailPollingWorker {
     catch (RuntimeException failure) { log.warn("Immediate Gmail poll could not be scheduled: {}", failure.getMessage()); }
   }
   private void runPoll() {
+    if (health != null) health.pollStarted();
     Optional<GmailPollingLeaseService.LeaseHandle> acquired;
     try { acquired = leaseService.tryAcquire(); } catch (RuntimeException ignored) { return; }
     if (acquired.isEmpty()) { log.debug("Gmail poll skipped because another replica owns the lease"); return; }
     try {
       List<MailboxIngestionPort.MailboxMessage> messages = mailbox.fetchSacombankMessages();
+      int failed = 0;
       log.info("Gmail poll fetched {} candidate bank alert(s)", messages.size());
       for (MailboxIngestionPort.MailboxMessage message : messages) {
         try { ingestion.ingest(new com.fundmanagement.api.dto.ApiDtos.BankTransactionIngestionRequest(message.providerMessageId(), message.rawPayload())); }
         catch (RuntimeException failure) {
+          failed++;
           if ("Bank message was not for the configured receiving account".equals(failure.getMessage())) {
             String payload = message.rawPayload() == null ? "" : message.rawPayload();
             String configured = settings == null ? "" : settings.get().accountNumber();
@@ -82,7 +85,8 @@ public class GmailPollingWorker {
           log.warn("Gmail bank alert ingestion failed: {}", failure.getMessage());
         }
       }
-    } catch (RuntimeException failure) { log.warn("Gmail poll failed: {}", failure.getMessage()); }
+      if (health != null) health.pollSucceeded(messages.size(), messages.size() - failed, failed);
+    } catch (RuntimeException failure) { if (health != null) health.pollFailed(failure); log.warn("Gmail poll failed: {}", failure.getMessage()); }
     finally { try { leaseService.release(acquired.get()); } catch (RuntimeException ignored) { /* TTL expiry remains the fallback. */ } }
   }
   private boolean safeWindowActive() { try { return detectionWindow.isActive(); } catch (RuntimeException ignored) { return false; } }
