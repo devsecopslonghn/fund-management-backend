@@ -210,7 +210,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
     String senderFilter = properties.getSenderFilter();
     if (senderFilter != null && !senderFilter.isBlank()) {
-      candidateIds.addAll(listMessageIds(mailbox, token, senderSearchQuery(senderFilter)));
+      List<String> senderAccountIds = listMessageIds(mailbox, token, senderSearchQuery(senderFilter, expectedAccount));
+      candidateIds.addAll(senderAccountIds);
+      // Gmail sometimes fails to index account text in forwarded HTML/MIME.
+      // Only then broaden to the same sender and short time window.
+      if (senderAccountIds.isEmpty()) candidateIds.addAll(listMessageIds(mailbox, token, senderSearchQuery(senderFilter)));
     }
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
@@ -340,6 +344,13 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       throw new IllegalArgumentException("Configured Gmail sender filter is invalid");
     }
     return "newer_than:3d from:" + sender;
+  }
+  private static String senderSearchQuery(String senderFilter, String accountNumber) {
+    String senderQuery = senderSearchQuery(senderFilter);
+    String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
+    if (digits.isBlank()) return senderQuery;
+    String dashed = digits.length() == 12 ? digits.substring(0, 3) + "-" + digits.substring(3, 6) + "-" + digits.substring(6) : digits;
+    return senderQuery + " (\"" + digits + "\" OR \"" + dashed + "\")";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
