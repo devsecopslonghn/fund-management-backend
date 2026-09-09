@@ -212,7 +212,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
     // scans therefore fetch only provider IDs not already persisted locally.
+    // A provider id is only terminally known after reconciliation is complete.
+    // Older PARSE_FAILED/NEEDS_REVIEW records must be fetched again so parser
+    // fixes and transient Gmail/MIME failures can repair them automatically.
     Set<String> known = transactions.findByProviderMessageIdIn(candidateIds).stream()
+        .filter(tx -> isTerminal(tx.reconciliationStatus))
         .map(tx -> tx.providerMessageId).filter(java.util.Objects::nonNull).collect(Collectors.toSet());
     FetchResult result = fetchNewMessages(mailbox, token, candidateIds, known);
     log.info("Gmail mailbox scan candidates={} known={} rawFetched={} matched={} rejected={} configuredAccount={}",
@@ -287,6 +291,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
       else { rejected++; if (rejectionDiagnostics++ < 5) logRejectedDiagnostic(id, raw); }
     }
     return new FetchResult(List.copyOf(messages), rawFetched, rejected);
+  }
+  private static boolean isTerminal(String status) {
+    return "MATCHED".equals(status) || "IGNORED".equals(status) || "REVERSED".equals(status);
   }
   private void logRejectedDiagnostic(String id, String raw) {
     try {
