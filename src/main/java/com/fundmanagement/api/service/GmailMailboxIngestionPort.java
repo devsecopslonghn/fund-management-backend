@@ -212,9 +212,11 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     if (senderFilter != null && !senderFilter.isBlank()) {
       List<String> senderAccountIds = listMessageIds(mailbox, token, senderSearchQuery(senderFilter, expectedAccount));
       candidateIds.addAll(senderAccountIds);
-      // Gmail sometimes fails to index account text in forwarded HTML/MIME.
-      // Only then broaden to the same sender and short time window.
-      if (senderAccountIds.isEmpty()) candidateIds.addAll(listMessageIds(mailbox, token, senderSearchQuery(senderFilter)));
+      // Also query the same sender without the account term. Gmail can fail to
+      // index account text in forwarded HTML/MIME; the bounded sender query
+      // still avoids the previous full-mailbox scan and local validation stays
+      // fail-closed.
+      candidateIds.addAll(listMessageIds(mailbox, token, senderSearchQuery(senderFilter)));
     }
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
