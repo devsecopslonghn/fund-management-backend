@@ -86,7 +86,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   public record GmailDiagnosticMessage(String messageId, String threadId, Instant gmailInternalDate,
       Instant mimeDate, int rawLength, List<GmailMimePart> mimeParts, String parserError,
       int parsedAccountDigits, String parsedAccountMasked, boolean parsedAccountMatchesConfigured,
-      Long parsedAmount, String parsedDirection, String parsedContent) {}
+      Long parsedAmount, String parsedDirection, String parsedContent, String redactedStructure) {}
 
   public record GmailMimePart(String path, String contentType, String charset,
       String transferEncoding, String disposition, int declaredSize) {}
@@ -121,7 +121,16 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     return new GmailDiagnosticMessage(messageId, metadata.threadId(), metadata.gmailInternalDate(), mimeDate,
         rawBytes.length, List.copyOf(parts), parserError, digits.length(), maskAccount(digits),
         !digits.isBlank() && digits.equals(expectedAccount), parsed == null ? null : parsed.amount(),
-        parsed == null ? null : parsed.direction(), parsedContent);
+        parsed == null ? null : parsed.direction(), parsedContent, redactedStructure(rawBytes));
+  }
+
+  private String redactedStructure(byte[] rawBytes) {
+    String text = SacombankMessageText.readablePayload(new String(rawBytes, StandardCharsets.UTF_8))
+        .replaceAll("(?s)<[^>]*>", " ")
+        .replaceAll("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", "<email>")
+        .replaceAll("(?<![A-Za-z])[-+]?\\d[\\d .,/:;-]{1,40}(?![A-Za-z])", "<number>")
+        .replaceAll("\\s+", " ").trim();
+    return text.length() > 2000 ? text.substring(0, 2000) : text;
   }
 
   private void inspectMimePart(Part part, String path, List<GmailMimePart> parts) throws MessagingException, IOException {
