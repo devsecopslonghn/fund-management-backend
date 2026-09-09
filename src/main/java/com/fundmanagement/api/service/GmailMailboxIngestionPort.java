@@ -208,11 +208,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // query can return hundreds of unrelated threaded messages and exhaust
     // Gmail API quota before the actual bank alert is inspected.
     candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
-    candidateIds.addAll(listMessageIds(mailbox, token, recentSenderQuery()));
-    // A forwarded alert can have neither the bank sender nor the account
-    // number in Gmail's indexed envelope. Keep this last-resort scan short so
-    // outages are recoverable without another full-mailbox quota spike.
-    candidateIds.addAll(listMessageIds(mailbox, token, "newer_than:2d"));
+    String senderFilter = properties.getSenderFilter();
+    if (senderFilter != null && !senderFilter.isBlank()) {
+      candidateIds.addAll(listMessageIds(mailbox, token, senderSearchQuery(senderFilter)));
+    }
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
@@ -335,8 +334,12 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String spaced = digits.length() == 12 ? digits.substring(0, 3) + " " + digits.substring(3, 6) + " " + digits.substring(6) : digits;
     return "newer_than:30d (\"" + digits + "\" OR \"" + dashed + "\" OR \"" + spaced + "\")";
   }
-  private static String recentSenderQuery() {
-    return "newer_than:3d (from:sacombank.com.vn OR \"SACOMBANK\")";
+  private static String senderSearchQuery(String senderFilter) {
+    String sender = senderFilter == null ? "" : senderFilter.trim();
+    if (!sender.matches("[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+")) {
+      throw new IllegalArgumentException("Configured Gmail sender filter is invalid");
+    }
+    return "newer_than:30d from:" + sender;
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
