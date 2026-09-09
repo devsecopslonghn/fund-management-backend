@@ -41,6 +41,55 @@ class PaymentServiceTest {
 
     assertThat(result.unallocatedAmount()).isZero(); assertThat(result.allocations()).extracting(ApiDtos.AllocationResponse::duePeriodId).containsExactly("july", "aug"); assertThat(july.amountPaid).isEqualTo(100_000); assertThat(july.status).isEqualTo(DueStatus.PAID); assertThat(august.amountPaid).isEqualTo(150_000); assertThat(august.status).isEqualTo(DueStatus.PARTIAL);
   }
+  @Test void twoPartialPaymentsAccumulateAndCloseTheSameOutstandingPeriod() {
+    DuePeriodDocument september = due("september", "2026-09", 100_000, 0);
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    when(members.get("member-1")).thenReturn(member);
+    when(payments.findByIdempotencyKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(Optional.empty());
+    when(payments.insert(org.mockito.ArgumentMatchers.<ManualPaymentDocument>any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(List.of(september));
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    ApiDtos.ManualPaymentResponse first = service.record(new ApiDtos.ManualPaymentRequest("member-1", 40_000,
+        Instant.parse("2026-09-01T00:00:00Z"), "partial-payment-key-01", "first partial"), "admin");
+    ApiDtos.ManualPaymentResponse second = service.record(new ApiDtos.ManualPaymentRequest("member-1", 60_000,
+        Instant.parse("2026-09-02T00:00:00Z"), "partial-payment-key-02", "second partial"), "admin");
+
+    assertThat(first.unallocatedAmount()).isZero();
+    assertThat(second.unallocatedAmount()).isZero();
+    assertThat(september.amountPaid).isEqualTo(100_000);
+    assertThat(september.status).isEqualTo(DueStatus.PAID);
+    assertThat(september.payments).extracting(payment -> payment.amount).containsExactly(40_000L, 60_000L);
+  }
+
+  @Test void rateChangeIncidentKeepsHistoricalPartialOnItsOriginalPeriodBeforeFifoContinues() {
+    // Regression fixture for the live THOTV17094 shape: the old 100k payment
+    // belongs to August after its rate changed to 200k. A later 500k payment
+    // therefore closes August first and leaves September at 400k/500k.
+    DuePeriodDocument august = due("august", "2026-08", 200_000, 100_000);
+    DuePeriodDocument september = due("september", "2026-09", 500_000, 0);
+    MemberDocument member = new MemberDocument(); member.id = "member-1";
+    when(members.get("member-1")).thenReturn(member);
+    when(payments.findByIdempotencyKey("gmail:rate-change-incident")).thenReturn(Optional.empty());
+    when(payments.insert(org.mockito.ArgumentMatchers.<ManualPaymentDocument>any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(dues.findByMemberIdOrderByMonthAsc("member-1")).thenReturn(List.of(august, september));
+    when(intents.findByMemberId("member-1")).thenReturn(List.of());
+    PaymentService service = new PaymentService(payments, dues, intents, members, audit);
+
+    ApiDtos.ManualPaymentResponse result = service.recordAutomatic("member-1", 500_000,
+        Instant.parse("2026-09-09T11:13:00Z"), "gmail:rate-change-incident", 2026, "system:gmail-auto");
+
+    assertThat(result.unallocatedAmount()).isZero();
+    assertThat(result.allocations()).extracting(ApiDtos.AllocationResponse::duePeriodId)
+        .containsExactly("august", "september");
+    assertThat(august.amountPaid).isEqualTo(200_000);
+    assertThat(august.status).isEqualTo(DueStatus.PAID);
+    assertThat(september.amountPaid).isEqualTo(400_000);
+    assertThat(september.status).isEqualTo(DueStatus.PARTIAL);
+    assertThat(august.amountPaid + september.amountPaid).isEqualTo(600_000);
+  }
+
   @Test void reversesPaymentAllocationsWithoutDeletingTheLedgerRecord() {
     DuePeriodDocument june = due("june", "2026-06", 100_000, 100_000); june.payments.add(new PaymentAllocation("payment-1", 100_000, Instant.now(), "automatic"));
     ManualPaymentDocument payment = new ManualPaymentDocument(); payment.id = "payment-1"; payment.memberId = "member-1"; payment.amount = 100_000; payment.allocations.add(new ManualPaymentDocument.ManualAllocation("june", 100_000));
