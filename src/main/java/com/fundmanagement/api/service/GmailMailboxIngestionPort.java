@@ -317,7 +317,7 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // Match ordinary Sacombank alerts first. A bounded recent-mail fallback
     // handles forwarded/MIME messages that Gmail does not index by sender or
     // subject; receiving-account validation remains local and fail-closed.
-    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn)";
+    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn OR \"" + digits + "\")";
   }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;

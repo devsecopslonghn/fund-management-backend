@@ -19,6 +19,9 @@ import java.util.Base64;
 import org.junit.jupiter.api.Test;
 
 class GmailMailboxIngestionPortTest {
+  @Test void gmailSearchQueryIncludesConfiguredReceivingAccount() {
+    assertThat(GmailMailboxIngestionPort.gmailSearchQuery("066-007-102000")).contains("066007102000");
+  }
   @Test void searchUsesBankIdentityBeforeBoundedRecentFallback() {
     String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
     assertThat(query).contains("Sacombank", "Ngân hàng TMCP Sài Gòn Thương Tín", "from:sacombank.com.vn");
