@@ -204,9 +204,9 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     String expectedAccount = settings.get().accountNumber() == null ? "" : settings.get().accountNumber().replaceAll("\\D", "");
     if (expectedAccount.isBlank()) return List.of();
     List<String> candidateIds = listMessageIds(mailbox, token, gmailSearchQuery(expectedAccount));
-    // Some forwarded bank alerts are not indexed by Gmail's bank/sender
-    // query. Always merge the bounded recent-mail scan; Gmail can return old
-    // indexed alerts while omitting a newly forwarded MIME message.
+    // Keep the scan bounded by the configured account. A broad sender/subject
+    // query can return hundreds of unrelated threaded messages and exhaust
+    // Gmail API quota before the actual bank alert is inspected.
     candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
@@ -313,12 +313,15 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
   static String gmailSearchQuery(String accountNumber) {
     String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
     if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
-    // Match ordinary Sacombank alerts first. A bounded recent-mail fallback
-    // handles forwarded/MIME messages that Gmail does not index by sender or
-    // subject; receiving-account validation remains local and fail-closed.
-    return "(\"Sacombank\" OR \"Ngân hàng TMCP Sài Gòn Thương Tín\" OR from:sacombank.com.vn OR \"" + digits + "\")";
+    return recentMailQuery(accountNumber);
   }
-  private String recentMailQuery(String accountNumber) { String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", ""); return "newer_than:30d \"" + digits + "\""; }
+  private static String recentMailQuery(String accountNumber) {
+    String digits = accountNumber == null ? "" : accountNumber.replaceAll("\\D", "");
+    if (digits.isBlank()) throw new IllegalArgumentException("Configured receiving account is required");
+    String dashed = digits.length() == 12 ? digits.substring(0, 3) + "-" + digits.substring(3, 6) + "-" + digits.substring(6) : digits;
+    String spaced = digits.length() == 12 ? digits.substring(0, 3) + " " + digits.substring(3, 6) + " " + digits.substring(6) : digits;
+    return "newer_than:30d (\"" + digits + "\" OR \"" + dashed + "\" OR \"" + spaced + "\")";
+  }
   private String messageUrl(String mailbox, String id, String format) {
     return properties.getApiBaseUrl() + "/users/" + mailbox + "/messages/" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "?format=" + format;
   }

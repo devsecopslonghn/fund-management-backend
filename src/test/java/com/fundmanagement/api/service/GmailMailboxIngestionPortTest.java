@@ -24,7 +24,7 @@ class GmailMailboxIngestionPortTest {
   }
   @Test void searchUsesBankIdentityBeforeBoundedRecentFallback() {
     String query = GmailMailboxIngestionPort.gmailSearchQuery("000 123-456");
-    assertThat(query).contains("Sacombank", "Ngân hàng TMCP Sài Gòn Thương Tín", "from:sacombank.com.vn");
+    assertThat(query).contains("newer_than:30d", "000123456");
     assertThat(query).doesNotContainIgnoringCase("unread");
   }
 
