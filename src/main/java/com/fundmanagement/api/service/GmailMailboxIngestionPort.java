@@ -209,6 +209,10 @@ public class GmailMailboxIngestionPort implements MailboxIngestionPort {
     // Gmail API quota before the actual bank alert is inspected.
     candidateIds.addAll(listMessageIds(mailbox, token, recentMailQuery(expectedAccount)));
     candidateIds.addAll(listMessageIds(mailbox, token, recentSenderQuery()));
+    // A forwarded alert can have neither the bank sender nor the account
+    // number in Gmail's indexed envelope. Keep this last-resort scan short so
+    // outages are recoverable without another full-mailbox quota spike.
+    candidateIds.addAll(listMessageIds(mailbox, token, "newer_than:2d"));
     candidateIds = new ArrayList<>(new LinkedHashSet<>(candidateIds));
     if (candidateIds.isEmpty()) return List.of();
     // The list endpoint is cheap; raw MIME retrieval is not. Repeated 5s/30m
