@@ -55,6 +55,23 @@ public class IngestionService {
     try { BankTransactionDocument saved = transactions.insert(tx); tryAutoMatch(saved); return response(saved); }
     catch (DuplicateKeyException duplicate) { BankTransactionDocument duplicateRecord = transactions.findByProviderMessageId(request.providerMessageId()).orElseThrow(() -> duplicate); tryAutoMatch(duplicateRecord); return response(duplicateRecord); }
   }
+  public ApiDtos.BankTransactionResponse ingestManual(ApiDtos.ManualBankTransactionRequest request, String actor) {
+    if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
+    String expected = normalizeDigits(settings.get().accountNumber());
+    String account = normalizeDigits(request.accountNumber());
+    if (account != null && !account.equals(expected)) throw new IllegalArgumentException("Manual transaction account does not match the configured receiving account");
+    BankTransactionDocument tx = new BankTransactionDocument();
+    tx.providerMessageId = "manual-" + java.util.UUID.randomUUID();
+    tx.occurredAt = request.occurredAt(); tx.amount = request.amount(); tx.direction = request.direction();
+    tx.accountNumber = account == null ? expected : account; tx.parsedContent = request.parsedContent().trim();
+    tx.availableBalance = request.availableBalance(); tx.createdAt = Instant.now();
+    tx.reconciliationStatus = "NEEDS_REVIEW"; tx.matchMethod = "MANUAL";
+    BankTransactionDocument saved = transactions.insert(tx);
+    tryAutoMatch(saved);
+    audit.record(actor, "BANK_TRANSACTION_MANUALLY_CREATED", "bank_transaction", saved.id,
+        Map.of(), Map.of("status", saved.reconciliationStatus, "amount", saved.amount, "direction", saved.direction));
+    return response(saved);
+  }
   private boolean sameAccount(String actual, String expected) { String left = normalizeDigits(actual); String right = normalizeDigits(expected); return left != null && right != null && !right.isBlank() && right.equals(left); }
   private void reparse(BankTransactionDocument tx) {
     try { applyParsed(tx, parser.parse(tx.rawPayload)); transactions.save(tx); }

@@ -105,6 +105,9 @@ public final class ApiDtos {
   }
   public record ReconciliationPageResponse(List<BankTransactionResponse> content, int page, int size, long totalElements) {}
   public record BankTransactionIngestionRequest(@NotBlank @Size(max = 255) String providerMessageId, @NotBlank @Size(max = 500000) String rawPayload) {}
+  public record ManualBankTransactionRequest(@NotNull Instant occurredAt, @Min(1) long amount,
+      @NotBlank @Pattern(regexp = "IN|OUT") String direction, @Size(max = 32) String accountNumber,
+      @NotBlank @Size(max = 500) String parsedContent, @Min(0) Long availableBalance) {}
   public record ReconciliationReviewRequest(@NotNull Boolean ignore, String memberId, @Size(max = 500) String note) {}
   public record ReconciliationRestoreRequest(@NotBlank @Size(max = 500) String reason) {}
   public record PaymentReversalRequest(@NotBlank @Size(max = 500) String reason) {}
