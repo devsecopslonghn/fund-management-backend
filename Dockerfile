@@ -1,4 +1,4 @@
-FROM maven:3.9.9-eclipse-temurin-21 AS build
+FROM maven:3.9.11-eclipse-temurin-21-alpine@sha256:922927df2c662cdd47ddb116443d6bec4696cfae3de1a0ddac8fcc7b87ce61ae AS build
 
 WORKDIR /workspace
 
@@ -17,10 +17,11 @@ RUN mvn --batch-mode --no-transfer-progress \
 COPY src ./src
 RUN mvn --batch-mode --no-transfer-progress package -DskipTests
 
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:21-jre-alpine@sha256:1a29e1fe337eb28b5bec30f0ee8ed29f0ff80ab6f75dcf9313efe82911065a52
 
-RUN groupadd --system --gid 10001 fund && \
-    useradd --system --uid 10001 --gid fund --home-dir /app --shell /usr/sbin/nologin fund
+RUN apk upgrade --no-cache && \
+    addgroup -S -g 10001 fund && \
+    adduser -S -D -H -u 10001 -G fund -s /sbin/nologin fund
 
 WORKDIR /app
 COPY --from=build /workspace/target/*.jar /app/app.jar
