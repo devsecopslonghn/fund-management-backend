@@ -6,19 +6,21 @@ on:
   pull_request:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   build:
-    uses: devsecopslonghn/.github/.github/workflows/java-container.yml@master
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    uses: devsecopslonghn/.github/.github/workflows/java-container.yml@9dce2f58f486a6bfb0a0d25c1ad901aaa342d0df
     with:
       java_version: "21"
       build_command: mvn -B -ntp test
       image_name: ghcr.io/devsecopslonghn/fund-management-backend
       dockerfile: Dockerfile
-      publish_image: true
-    secrets: inherit
+      publish_image: ${{ github.event_name != 'pull_request' }}
 
   update-gitops:
     needs: build
@@ -26,21 +28,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RELEASE_BRANCH: release/backend-${{ github.sha }}
+      IMAGE_REPOSITORY: ghcr.io/devsecopslonghn/fund-management-backend
+      IMAGE_TAG: ${{ github.sha }}@${{ needs.build.outputs.digest }}
     steps:
+      - name: Validate immutable release output
+        run: |
+          [[ "$IMAGE_TAG" =~ ^[a-f0-9]{40}@sha256:[a-f0-9]{64}$ ]]
+
       - name: Checkout Helm chart
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: devsecopslonghn/fund-management-helm-chart
           ref: master
           token: ${{ secrets.GITOPS_TOKEN }}
           path: chart
 
-      - name: Update image reference
+      - name: Open immutable GitOps update
         working-directory: chart
         env:
-          IMAGE_REPOSITORY: ghcr.io/devsecopslonghn/fund-management-backend
-          IMAGE_TAG: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
         run: |
+          set -euo pipefail
+          existing=$(gh pr list --repo devsecopslonghn/fund-management-helm-chart --head "$RELEASE_BRANCH" --state open --json url --jq '.[0].url // empty')
+          if test -n "$existing"; then echo "Existing release PR: $existing"; exit 0; fi
+          git switch -c "$RELEASE_BRANCH"
           python3 - <<'PY'
           import os
           import re
@@ -58,12 +71,10 @@ jobs:
               raise SystemExit("backend image reference was not updated exactly once")
           path.write_text(text[:match.start()] + block + text[match.end():])
           PY
-
-      - name: Commit GitOps reference
-        working-directory: chart
-        run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add values.yaml
-          git diff --cached --quiet || git commit -m "chore(gitops): deploy backend ${{ github.sha }} [skip ci]"
-          git push origin master
+          git diff --cached --quiet && { echo 'Chart already references this digest'; exit 0; }
+          git commit -m "chore(gitops): deploy backend $GITHUB_SHA [skip ci]"
+          git push origin "HEAD:$RELEASE_BRANCH"
+          gh pr create --repo devsecopslonghn/fund-management-helm-chart --base master --head "$RELEASE_BRANCH" --title "chore(gitops): deploy backend $GITHUB_SHA" --body "Deploy the exact CI-scanned backend image: $IMAGE_TAG. Merge after chart validation and application review."
