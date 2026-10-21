@@ -362,7 +362,7 @@ paths:
       security: [{ basicAuth: [] }]
       operationId: registerGmailPubSubWatch
       description: SUPER_ADMIN only. Registers or renews Gmail users.watch and stores the history cursor. Requires Pub/Sub topic configuration.
-      responses: { '200': { description: Watch registration state, content: { application/json: { schema: { $ref: '#/components/schemas/GmailWatchState' } } } }
+      responses: { '200': { description: Watch registration state, content: { application/json: { schema: { $ref: '#/components/schemas/GmailWatchState' } } } } }
   /admin/gmail/pubsub/diagnostic-messages:
     get:
       tags: [Admin]
@@ -423,6 +423,39 @@ paths:
       operationId: listAuditLogs
       parameters: [{ name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }, { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }, { name: entityType, in: query, schema: { type: string } }]
       responses: { '200': { description: Immutable financial audit events, content: { application/json: { schema: { $ref: '#/components/schemas/AuditLogPage' } } } } }
+  /admin/migrations/member-dues/repair:
+    post:
+      tags: [Admin]
+      operationId: repairMemberDues
+      security: [{ basicAuth: [] }]
+      description: |
+        Super Admin only. Previews or applies a repair for exactly one active member/year.
+        Creates missing configured annual periods and consumes existing FIFO credit only;
+        existing allocations, explicit QR selections, rate overrides and ledger amounts are preserved.
+        Omitted dryRun defaults to true. Applying requires the previewToken from a fresh preview.
+        A stale token returns 409; repeat preview/apply after success is a no-op.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [memberCode, year, reason]
+              properties:
+                memberCode: { type: string, pattern: '^[A-Za-z0-9_-]{2,32}$' }
+                year: { type: integer, minimum: 2000, maximum: 9999 }
+                dryRun: { type: boolean, default: true }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                previewToken: { type: string, pattern: '^[a-f0-9]{64}$', description: Required for apply. Fingerprints member plan and due/payment/bank state. }
+      responses:
+        '200':
+          description: Before/after period payments, unchanged ledger income, credits and bank-link changes
+          content: { application/json: { schema: { $ref: '#/components/schemas/MemberDuesRepair' } } }
+        '400': { description: Invalid request or member }
+        '401': { description: Authentication required }
+        '403': { description: Super Admin required }
+        '409': { description: Missing/stale preview or inconsistent ledger; no repair committed }
+
 components:
   securitySchemes: { basicAuth: { type: http, scheme: basic } }
   parameters:
@@ -432,6 +465,40 @@ components:
     Conflict: { description: Unique/business-key conflict }
     NotFound: { description: Resource not found }
   schemas:
+    MemberDuesRepair:
+      type: object
+      properties:
+        memberCode: { type: string }
+        year: { type: integer }
+        dryRun: { type: boolean }
+        previewToken: { type: string }
+        createdPeriods: { type: array, items: { type: string } }
+        periods:
+          type: array
+          items:
+            type: object
+            properties:
+              month: { type: string }
+              created: { type: boolean }
+              amountDue: { type: integer, format: int64 }
+              paidBefore: { type: integer, format: int64 }
+              paidAfter: { type: integer, format: int64 }
+              statusAfter: { type: string }
+        payments:
+          type: array
+          items:
+            type: object
+            properties:
+              paymentId: { type: string }
+              amount: { type: integer, format: int64 }
+              creditBefore: { type: integer, format: int64 }
+              creditAfter: { type: integer, format: int64 }
+        totalReceivedBefore: { type: integer, format: int64 }
+        totalReceivedAfter: { type: integer, format: int64 }
+        creditBefore: { type: integer, format: int64 }
+        creditAfter: { type: integer, format: int64 }
+        bankLinksUpdated: { type: integer }
+
     PublicOverview: { type: object, required: [balance, members], properties: { balance: { type: integer, format: int64, description: Aggregate VND only }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, members: { type: array, items: { $ref: '#/components/schemas/PublicMemberStatus' } } } }
     PublicMemberStatus: { type: object, properties: { name: { type: string }, status: { type: string, enum: [NO_DUE_PERIODS, UP_TO_DATE, SOME_MONTHS_MISSING, OVERDUE] } } }
     PublicPaymentDashboard: { type: object, properties: { balance: { type: integer, format: int64 }, incomeThisMonth: { type: integer, format: int64 }, expenseThisMonth: { type: integer, format: int64 }, monthlySeries: { type: array, items: { $ref: '#/components/schemas/MonthlySeries' } }, year: { type: integer, nullable: true }, months: { type: array, items: { type: string } }, members: { type: array, items: { $ref: '#/components/schemas/PublicPaymentDashboardMember' } } } }

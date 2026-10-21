@@ -40,6 +40,11 @@ public class DuesService {
   private final MemberRepository members; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService memberService; private final FundProperties properties; private final AuditService audit; private final SettingsService settings; private final PaymentDetectionWindowService detectionWindow; private final PaymentReferenceService paymentReferences; private final java.util.Optional<GmailPollingWorker> gmailPollingWorker; private final TaskExecutor taskExecutor;
   private PaymentService paymentService;
   private MongoTemplate mongoTemplate;
+  private AnnualDuePlanService annualPlans;
+  private FinancialTransactions financialTransactions;
+  @Autowired public void configureAnnualPlans(AnnualDuePlanService plans, FinancialTransactions transactions) {
+    this.annualPlans = plans; this.financialTransactions = transactions;
+  }
   /** Test-friendly constructor; production uses the audited constructor below. */
   public DuesService(MemberRepository members, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService memberService, FundProperties properties) { this(members, dues, intents, memberService, properties, null, null, null, null, java.util.Optional.empty(), null); }
   /** Test-friendly constructor with persisted settings. */
@@ -368,24 +373,16 @@ public class DuesService {
    * gap between those two read models without requiring Admin review.
    */
   private void ensureYearPlan(MemberDocument member, int year) {
-    String startValue = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
-    if (startValue == null || startValue.isBlank()) return;
-    if (!ContributionPeriod.isRegularMonth(startValue)) return;
-    int count = 14;
-    String planEnd = ContributionPeriod.key(year, Math.min(count, 14));
-    // Keep the legacy 12-period query shape for old clients/tests while a
-    // 14-period plan explicitly includes the two bonus keys.
-    List<DuePeriodDocument> existing = dues.findByMemberIdAndMonthBetweenOrderByMonthAsc(member.id, ContributionPeriod.key(year, 1), planEnd);
-    Set<String> existingMonths = existing.stream().map(d -> d.month).collect(java.util.stream.Collectors.toSet());
-    List<DuePeriodDocument> missing = new java.util.ArrayList<>();
-    for (String period : ContributionPeriod.yearPeriods(year)) {
-      if (!ContributionPeriod.inPlan(period, startValue, count) || existingMonths.contains(period)) continue;
-      DuePeriodDocument due = new DuePeriodDocument(); due.memberId = member.id; due.month = period; due.amountDue = memberService.rateFor(member, due.month); due.amountPaid = initiallyPaid(member, due.month) ? due.amountDue : 0; due.seededPaid = due.amountPaid > 0; due.status = status(due); missing.add(due);
-    }
-    if (!missing.isEmpty()) {
-      try { dues.saveAll(missing); } catch (DuplicateKeyException ignored) { /* another request materialized the same plan */ }
-    }
-    refreshAllocations(member);
+    java.util.function.Supplier<Void> materialize = () -> {
+      MemberDocument current = financialTransactions == null ? member : memberService.get(member.id);
+      AnnualDuePlanService plans = annualPlans == null ? new AnnualDuePlanService(dues, memberService) : annualPlans;
+      plans.ensureYear(current, year, "system:dues");
+      if (paymentService != null) paymentService.allocateMemberCredits(current.id, year, "system:dues");
+      return null;
+    };
+    if (financialTransactions == null) materialize.get();
+    else financialTransactions.run(materialize);
+    // Existing allocations and adjustments remain intact; only remaining credit is consumed.
   }
 
   private void refreshAllocations(MemberDocument member) {

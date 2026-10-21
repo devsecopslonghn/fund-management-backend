@@ -617,3 +617,28 @@ delivery IDs and provider message IDs are persisted to absorb retries. Keep
 notifications can be delayed or dropped. The token URL must be treated as a
 secret; OIDC-authenticated Pub/Sub push is preferred for production and can
 replace the shared-token mode without changing the ingestion contract.
+
+### Missing annual due periods and existing credit
+
+Direct automatic FIFO bank reconciliation now materializes the matched member's
+configured annual plan before allocating, using the same materializer as public
+year lookup. It inserts missing periods only and preserves existing dues, seeded
+provenance, adjustments and explicit QR selections. Financial writes use MongoDB
+replica-set transactions with bounded retry of aborted conflicts. New annual
+payments persist `allocationYear`; legacy credit uses its existing allocation
+year. Legacy credit without either an allocation year or an existing allocated
+period is left unchanged for explicit review; bank occurrence dates are not
+used to guess an annual-reference boundary.
+
+The Super Admin-only `POST /api/v1/admin/migrations/member-dues/repair` previews
+(default `dryRun: true`) or applies a repair for exactly one member/year. Applying
+requires `dryRun: false`, a reason and the returned `previewToken`. A changed
+member plan, due, payment or linked bank record invalidates the token. Existing
+paid allocations remain intact; only unallocated FIFO credit is consumed. The
+repair updates bank links and records one `MEMBER_DUES_REPAIRED` audit event; it
+does not insert payments, change ledger income or modify other members. A new
+preview/apply after completion is a no-op. A token from before an apply is stale.
+
+A scoped operational procedure and local replica-set test instructions are in
+[the repair runbook](docs/member-dues-repair.md). Deployment and any live repair
+remain separately authorized operational actions.

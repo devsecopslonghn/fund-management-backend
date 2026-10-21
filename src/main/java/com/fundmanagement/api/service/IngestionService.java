@@ -38,6 +38,8 @@ public class IngestionService {
   /** Compatibility constructor retained for focused tests that predate annual references. */
   public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo) { this(transactions, parser, settings, intents, payments, audit, gmail, mongo, null, null); }
   @Autowired public IngestionService(BankTransactionRepository transactions, SacombankMessageParser parser, SettingsService settings, PaymentIntentRepository intents, PaymentService payments, AuditService audit, GmailProperties gmail, MongoTemplate mongo, PaymentReferenceRepository references, MemberRepository members) { this.transactions = transactions; this.parser = parser; this.settings = settings; this.intents = intents; this.payments = payments; this.audit = audit; this.gmail = gmail; this.mongo = mongo; this.references = references; this.members = members; }
+  private FinancialTransactions financialTransactions;
+  @Autowired public void setFinancialTransactions(FinancialTransactions transactions) { this.financialTransactions = transactions; }
   public ApiDtos.BankTransactionResponse ingest(ApiDtos.BankTransactionIngestionRequest request) {
     if (!settings.ingestionStatus().enabled()) throw new IllegalStateException("Bank ingestion is disabled");
     var existing = transactions.findByProviderMessageId(request.providerMessageId()); if (existing.isPresent()) {
@@ -112,6 +114,22 @@ public class IngestionService {
     BankTransactionDocument claimed = mongo.findAndModify(query, claim, FindAndModifyOptions.options().returnNew(true), BankTransactionDocument.class);
     if (claimed == null) return;
     try {
+      if (financialTransactions == null) matchClaimed(claimed);
+      else financialTransactions.run(() -> {
+        BankTransactionDocument current = transactions.findById(claimed.id).orElseThrow();
+        if ("AUTO_MATCHING".equals(current.reconciliationStatus)) matchClaimed(current);
+        return null;
+      });
+    } catch (RuntimeException failure) {
+      // An uncertain commit may already be MATCHED. Never overwrite that state.
+      mongo.updateFirst(Query.query(Criteria.where("_id").is(claimed.id)
+          .and("reconciliationStatus").is("AUTO_MATCHING")),
+          new Update().set("conflictReason", "AUTO_MATCH_FAILURE").set("reconciliationStatus", "NEEDS_REVIEW"),
+          BankTransactionDocument.class);
+    }
+  }
+
+  private void matchClaimed(BankTransactionDocument claimed) {
       // Amount/status/expiry are indexed, so a bank alert does not scan every
       // historical pending intent before checking the exact opaque content.
       List<PaymentIntentDocument> matches = intents.findByStatusAndTotalAmountAndExpiresAtAfter(IntentStatus.PENDING, claimed.amount, Instant.now()).stream().filter(i -> exactIntentMatch(i, claimed)).toList();
@@ -164,7 +182,6 @@ public class IngestionService {
       claimed.matchMethod = matches.size() == 1 ? "PAYMENT_INTENT" : annualYear != null ? "LEGACY_REFERENCE" : "MEMBER_IDENTIFIER";
       claimed.conflictReason = null; claimed.matchCandidates = new ArrayList<>(); claimed.reconciliationStatus = "MATCHED"; claimed.matchedMemberId = intent.memberId; claimed.matchedDuePeriodIds = payment.allocations().stream().map(ApiDtos.AllocationResponse::duePeriodId).toList(); claimed.reviewedBy = "system:gmail-auto"; claimed.reviewedAt = Instant.now(); transactions.save(claimed);
       if (audit != null) audit.record("system:gmail-auto", "BANK_TRANSACTION_AUTO_MATCHED", "bank_transaction", claimed.id, java.util.Map.of("status", "NEEDS_REVIEW"), java.util.Map.of("status", "MATCHED", "amount", claimed.amount));
-    } catch (RuntimeException failure) { claimed.conflictReason = "AUTO_MATCH_FAILURE"; claimed.reconciliationStatus = "NEEDS_REVIEW"; transactions.save(claimed); }
   }
   private boolean exactIntentMatch(PaymentIntentDocument intent, BankTransactionDocument tx) {
     if (intent == null || intent.status != IntentStatus.PENDING || intent.totalAmount != tx.amount || intent.transferContent == null || intent.transferContent.isBlank() || intent.createdAt == null || tx.occurredAt == null) return false;

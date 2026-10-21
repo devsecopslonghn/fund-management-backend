@@ -19,6 +19,8 @@ public class ManualPaymentDocument {
   public String recordedBy;
   /** FIFO is the normal member-wide allocation; INTENT preserves an explicit QR selection. */
   public String allocationMode = "FIFO";
+  /** Optional for legacy records; new annual FIFO payments retain their allocation boundary. */
+  public Integer allocationYear;
   public List<ManualAllocation> allocations = new ArrayList<>();
   /** Reversals are append-only financial corrections; the original payment remains auditable. */
   public boolean reversed;

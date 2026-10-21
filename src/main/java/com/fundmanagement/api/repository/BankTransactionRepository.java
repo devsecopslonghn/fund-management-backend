@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 
 public interface BankTransactionRepository extends MongoRepository<BankTransactionDocument, String> {
   Optional<BankTransactionDocument> findByProviderMessageId(String providerMessageId);
+  List<BankTransactionDocument> findByMatchedMemberId(String memberId);
   List<BankTransactionDocument> findByProviderMessageIdIn(Collection<String> providerMessageIds);
   Page<BankTransactionDocument> findByReconciliationStatusOrderByOccurredAtDesc(String status, Pageable pageable);
   List<BankTransactionDocument> findByReconciliationStatus(String status);

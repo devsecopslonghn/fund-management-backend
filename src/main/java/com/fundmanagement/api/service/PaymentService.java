@@ -22,13 +22,26 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.util.function.Supplier;
 
 @Service
 public class PaymentService {
   private final ManualPaymentRepository payments; private final DuePeriodRepository dues; private final PaymentIntentRepository intents; private final MemberService members; private final AuditService audit;
   public PaymentService(ManualPaymentRepository payments, DuePeriodRepository dues, PaymentIntentRepository intents, MemberService members, AuditService audit) { this.payments = payments; this.dues = dues; this.intents = intents; this.members = members; this.audit = audit; }
-  /** A durable record is inserted before allocation. Retrying the same key resumes safely after a crash. Production should use a Mongo replica-set transaction. */
+  private AnnualDuePlanService annualPlans;
+  private FinancialTransactions transactions;
+  private com.fundmanagement.api.repository.BankTransactionRepository bankTransactions;
+  @Autowired public void setBankTransactions(com.fundmanagement.api.repository.BankTransactionRepository banks) { this.bankTransactions = banks; }
+  @Autowired public void configureFinancialWrites(AnnualDuePlanService annualPlans, FinancialTransactions transactions) {
+    this.annualPlans = annualPlans; this.transactions = transactions;
+  }
+  private <T> T atomic(Supplier<T> work) { return transactions == null ? work.get() : transactions.run(work); }
+  /** The ledger, allocation projections, intent status and audit commit together. */
   public ApiDtos.ManualPaymentResponse record(ApiDtos.ManualPaymentRequest request, String actor) {
+    return atomic(() -> recordInternal(request, actor));
+  }
+  private ApiDtos.ManualPaymentResponse recordInternal(ApiDtos.ManualPaymentRequest request, String actor) {
     MemberDocument member = members.get(request.memberId()); ManualPaymentDocument payment = payments.findByIdempotencyKey(request.idempotencyKey()).orElseGet(() -> createPayment(request, actor));
     if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
     if (!payment.memberId.equals(member.id) || payment.amount != request.amount()) throw new IllegalStateException("Idempotency key was already used for a different payment");
@@ -36,15 +49,33 @@ public class PaymentService {
   }
   /** Automatic bank reconciliation path. Annual references constrain allocation to that calendar year. */
   public ApiDtos.ManualPaymentResponse recordAutomatic(String memberId, long amount, Instant occurredAt, String idempotencyKey, Integer year, String actor) {
+    return atomic(() -> recordAutomaticInternal(memberId, amount, occurredAt, idempotencyKey, year, actor));
+  }
+  private ApiDtos.ManualPaymentResponse recordAutomaticInternal(String memberId, long amount, Instant occurredAt, String idempotencyKey, Integer year, String actor) {
     MemberDocument member = members.get(memberId);
     ApiDtos.ManualPaymentRequest request = new ApiDtos.ManualPaymentRequest(member.id, amount, occurredAt, idempotencyKey, "Automatic match from annual payment reference");
-    ManualPaymentDocument payment = payments.findByIdempotencyKey(request.idempotencyKey()).orElseGet(() -> createPayment(request, actor));
-    if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
-    if (!payment.memberId.equals(member.id) || payment.amount != amount) throw new IllegalStateException("Idempotency key was already used for a different payment");
+    ManualPaymentDocument existing = payments.findByIdempotencyKey(idempotencyKey).orElse(null);
+    if (existing != null) validateAutomaticPayment(existing, member.id, amount, year);
+    if (annualPlans != null) {
+      if (year == null) throw new IllegalArgumentException("Automatic payments require an allocation year");
+      annualPlans.ensureYear(member, year, actor);
+      // Older credit must be consumed before inserting the new incoming payment.
+      allocateMemberCredits(member.id, year, actor);
+    }
+    ManualPaymentDocument payment = payments.findByIdempotencyKey(idempotencyKey).orElseGet(() -> createPayment(request, actor));
+    validateAutomaticPayment(payment, member.id, amount, year);
+    payment.allocationYear = year;
     applyOutstanding(payment, year); updateIntentStatuses(member.id); payment.recordedBy = actor; payments.save(payment);
     if (audit != null) audit.record(actor, "BANK_PAYMENT_AUTO_ALLOCATED", "manual_payment", payment.id, Map.of(), Map.of("memberId", member.id, "amount", payment.amount, "allocated", payment.amount - payment.unallocatedAmount, "credit", payment.unallocatedAmount));
     return toResponse(payment);
   }
+  private void validateAutomaticPayment(ManualPaymentDocument payment, String memberId, long amount, Integer year) {
+    if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
+    if (!payment.memberId.equals(memberId) || payment.amount != amount) throw new IllegalStateException("Idempotency key was already used for a different payment");
+    if ("INTENT".equals(payment.allocationMode)) throw new IllegalStateException("Payment belongs to an explicit intent");
+    if (payment.allocationYear != null && !payment.allocationYear.equals(year)) throw new IllegalStateException("Payment allocation year changed");
+  }
+
   /**
    * Automatic reconciliation for a payment intent. An intent is an explicit
    * user selection, so allocation must never fall back to member-wide FIFO.
@@ -52,6 +83,9 @@ public class PaymentService {
    * resumes any allocation that was persisted before a process interruption.
    */
   public ApiDtos.ManualPaymentResponse recordForIntent(PaymentIntentDocument intent, long amount, Instant occurredAt, String idempotencyKey, String actor) {
+    return atomic(() -> recordForIntentInternal(intent, amount, occurredAt, idempotencyKey, actor));
+  }
+  private ApiDtos.ManualPaymentResponse recordForIntentInternal(PaymentIntentDocument intent, long amount, Instant occurredAt, String idempotencyKey, String actor) {
     if (intent == null || intent.memberId == null || intent.duePeriodIds == null || intent.duePeriodIds.isEmpty()) {
       throw new IllegalArgumentException("Payment intent selection is invalid");
     }
@@ -71,6 +105,9 @@ public class PaymentService {
   }
   /** Reverses a payment without deleting the original ledger record or its audit trail. */
   public ApiDtos.PaymentReversalResponse reverse(String paymentId, String actor, String reason) {
+    return atomic(() -> reverseInternal(paymentId, actor, reason));
+  }
+  private ApiDtos.PaymentReversalResponse reverseInternal(String paymentId, String actor, String reason) {
     ManualPaymentDocument payment = payments.findById(paymentId).orElseThrow(() -> new IllegalArgumentException("Payment not found"));
     if (payment.reversed) throw new IllegalStateException("Payment has already been reversed");
     List<ManualPaymentDocument.ManualAllocation> allocations = payment.allocations == null ? List.of() : List.copyOf(payment.allocations);
@@ -101,6 +138,39 @@ public class PaymentService {
     return reverse(payment.id, actor, reason);
   }
 
+  /** Consumes only existing credit; lookup must not rebuild historical allocations or rates. */
+  public void allocateMemberCredits(String memberId, int year, String actor) {
+    atomic(() -> {
+      List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(memberId);
+      for (ManualPaymentDocument payment : payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc(memberId)) {
+        if (payment.reversed || "INTENT".equals(payment.allocationMode) || payment.unallocatedAmount <= 0
+            || !PaymentAllocationYear.matches(payment, periods, year)) continue;
+        long before = payment.unallocatedAmount;
+        applyOutstanding(payment, year);
+        if (before == payment.unallocatedAmount) continue;
+        payments.save(payment);
+        synchronizeBankLinks(payment);
+        if (audit != null) audit.record(actor, "PAYMENT_CREDIT_ALLOCATED", "manual_payment", payment.id,
+            Map.of("credit", before), Map.of("memberId", memberId, "credit", payment.unallocatedAmount));
+      }
+      updateIntentStatuses(memberId);
+      return null;
+    });
+  }
+
+  private void synchronizeBankLinks(ManualPaymentDocument payment) {
+    if (bankTransactions == null || payment.idempotencyKey == null) return;
+    String key = payment.idempotencyKey;
+    if (!key.startsWith("gmail:") && !key.startsWith("bank:")) return;
+    bankTransactions.findByProviderMessageId(key.substring(key.indexOf(':') + 1)).ifPresent(bank -> {
+      if ("AUTO_MATCHING".equals(bank.reconciliationStatus)) return;
+      if (!"MATCHED".equals(bank.reconciliationStatus) || !payment.memberId.equals(bank.matchedMemberId)
+          || bank.amount != payment.amount) throw new IllegalStateException("Bank payment link is inconsistent");
+      bank.matchedDuePeriodIds = payment.allocations.stream().map(a -> a.duePeriodId).distinct().toList();
+      bankTransactions.save(bank);
+    });
+  }
+
   /**
    * Refreshes due snapshots from the member's effective rates and rebuilds only
    * member-wide FIFO allocations. Explicit QR intent allocations stay tied to
@@ -108,6 +178,9 @@ public class PaymentService {
    * this operation changes allocation projections and records an audit event.
    */
   public void reallocateMemberPayments(MemberDocument member, String actor, String reason) {
+    atomic(() -> { reallocateMemberPaymentsInternal(transactions == null ? member : members.get(member.id), actor, reason); return null; });
+  }
+  private void reallocateMemberPaymentsInternal(MemberDocument member, String actor, String reason) {
     List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(member.id).stream()
         .sorted(Comparator.comparing(due -> due.month == null ? "" : due.month,
             ContributionPeriod.comparator()))
@@ -246,11 +319,16 @@ public class PaymentService {
     try { return payments.insert(payment); } catch (DuplicateKeyException ex) { return payments.findByIdempotencyKey(request.idempotencyKey()).orElseThrow(() -> ex); }
   }
   private void applyOutstanding(ManualPaymentDocument payment, Integer year) {
-    long alreadyAllocated = payment.allocations.stream().mapToLong(a -> a.amount).sum(); long remaining = Math.subtractExact(payment.amount, alreadyAllocated); if (remaining == 0) { payment.unallocatedAmount = 0; return; }
-    List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(payment.memberId).stream().sorted(Comparator.comparing(p -> p.month)).toList(); List<ManualPaymentDocument.ManualAllocation> newAllocations = new ArrayList<>();
-    for (DuePeriodDocument due : periods) { if (remaining == 0) break; if (year != null && (due.month == null || !due.month.startsWith(year + "-"))) continue; long outstanding = Math.max(0, due.amountDue - due.amountPaid); if (outstanding == 0) continue; long allocated = Math.min(remaining, outstanding); due.amountPaid = Math.addExact(due.amountPaid, allocated); due.status = status(due); due.payments.add(new PaymentAllocation(payment.id, allocated, Instant.now(), year == null ? "manual" : "automatic")); dues.save(due); newAllocations.add(new ManualPaymentDocument.ManualAllocation(due.id, allocated)); remaining -= allocated; }
-    payment.allocations.addAll(newAllocations); payment.unallocatedAmount = remaining;
+    List<DuePeriodDocument> periods = dues.findByMemberIdOrderByMonthAsc(payment.memberId);
+    if (year != null && annualPlans != null) {
+      MemberDocument member = members.get(payment.memberId);
+      String start = member.contributionStartMonth == null || member.contributionStartMonth.isBlank() ? member.baselineMonth : member.contributionStartMonth;
+      periods = periods.stream().filter(d -> ContributionPeriod.inPlan(d.month, start, 14)).toList();
+    }
+    for (DuePeriodDocument due : FifoAllocator.allocateRemaining(payment, periods, year,
+        Instant.now(), year == null ? "manual" : "automatic")) dues.save(due);
   }
+
   private void applySelected(ManualPaymentDocument payment, List<String> duePeriodIds) {
     long alreadyAllocated = payment.allocations.stream().mapToLong(a -> a.amount).sum();
     long remaining = Math.subtractExact(payment.amount, alreadyAllocated);
@@ -274,6 +352,6 @@ public class PaymentService {
     payment.allocations.addAll(newAllocations); payment.unallocatedAmount = remaining;
   }
   private DueStatus status(DuePeriodDocument due) { if (due.amountPaid == 0) return DueStatus.UNPAID; if (due.amountPaid < due.amountDue) return DueStatus.PARTIAL; if (due.amountPaid == due.amountDue) return DueStatus.PAID; return DueStatus.OVERPAID; }
-  private void updateIntentStatuses(String memberId) { for (PaymentIntentDocument intent : intents.findByMemberId(memberId)) { if (intent.status == IntentStatus.EXPIRED || intent.status == IntentStatus.CREDIT) continue; List<DuePeriodDocument> selected = dues.findAllById(intent.duePeriodIds); if (selected.size() != intent.duePeriodIds.size()) continue; boolean allPaid = selected.stream().allMatch(due -> due.amountPaid >= due.amountDue); boolean anyPaid = selected.stream().anyMatch(due -> due.amountPaid > 0); IntentStatus next = allPaid ? IntentStatus.FULFILLED : anyPaid ? IntentStatus.PARTIAL : IntentStatus.PENDING; if (intent.status != next) { intent.status = next; intents.save(intent); } } }
+  private void updateIntentStatuses(String memberId) { IntentStatusProjector.refresh(memberId, dues, intents); }
   private ApiDtos.ManualPaymentResponse toResponse(ManualPaymentDocument payment) { return new ApiDtos.ManualPaymentResponse(payment.id, payment.memberId, payment.amount, payment.unallocatedAmount, payment.allocations.stream().map(a -> new ApiDtos.AllocationResponse(a.duePeriodId, a.amount)).toList()); }
 }
