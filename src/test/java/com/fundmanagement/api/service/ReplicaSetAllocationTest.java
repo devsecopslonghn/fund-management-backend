@@ -47,8 +47,8 @@ class ReplicaSetAllocationTest {
         Thread.sleep(250);
       }
     }
-    properties.add("spring.data.mongodb.uri", () -> uri);
-    properties.add("spring.data.mongodb.database", () -> "fund_allocation_test_" + TEST_DATABASE);
+    properties.add("spring.mongodb.uri", () -> uri);
+    properties.add("spring.mongodb.database", () -> "fund_allocation_test_" + TEST_DATABASE);
   }
   private static final String TEST_DATABASE = UUID.randomUUID().toString().replace("-", "");
   @Autowired MemberRepository members;

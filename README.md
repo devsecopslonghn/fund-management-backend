@@ -642,3 +642,22 @@ preview/apply after completion is a no-op. A token from before an apply is stale
 A scoped operational procedure and local replica-set test instructions are in
 [the repair runbook](docs/member-dues-repair.md). Deployment and any live repair
 remain separately authorized operational actions.
+
+### Runtime security baseline
+
+The backend uses Spring Boot 4.0.8 / Spring Framework 7.0.9 and Springdoc 3.0.3.
+The patched Tomcat 11.0.27 runtime replaces the previous Tomcat 10 override.
+Jackson 2.21.8 and Jackson 3.1.7 are managed as complete BOM families so the
+packaged application uses patched JSON dependencies.
+
+HTTP and existing application integrations deliberately retain the established
+Jackson 2 wire contract through Spring Boot's supported `spring-boot-jackson2`
+compatibility module and `spring.http.converters.preferred-json-mapper=jackson2`.
+The `non_null` serialization policy lives under `spring.jackson2`. This module
+is a migration bridge; a later Jackson 3 migration must preserve public DTOs,
+Pub/Sub JsonNode binding, dates, and repair preview fingerprint compatibility.
+
+MongoDB connection properties now use `spring.mongodb.uri/database`; the
+`MONGODB_URI` and `MONGODB_DATABASE` deployment environment variables remain the
+same. Index configuration remains under `spring.data.mongodb`. No database
+migration or financial data rewrite is required for this dependency update.

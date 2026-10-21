@@ -1,12 +1,16 @@
 spring:
   application:
     name: fund-management-api
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://localhost:27017/fund_management}
+    database: ${MONGODB_DATABASE:fund_management}
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/fund_management}
-      database: ${MONGODB_DATABASE:fund_management}
       auto-index-creation: true
-  jackson:
+  http:
+    converters:
+      preferred-json-mapper: jackson2
+  jackson2:
     default-property-inclusion: non_null
 management:
   endpoints:
