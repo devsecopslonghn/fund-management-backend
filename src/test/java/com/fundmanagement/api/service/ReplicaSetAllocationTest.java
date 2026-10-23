@@ -63,6 +63,9 @@ class ReplicaSetAllocationTest {
   @Autowired FinancialTransactions transactions;
   @Autowired MongoTemplate mongo;
   @Autowired ObjectMapper mapper;
+  @Autowired ReconciliationService reconciliationService;
+  @Autowired MemberService memberService;
+  @Autowired IngestionService ingestionService;
 
   @BeforeEach void clearOnlyGeneratedTestDatabase() {
     assertThat(mongo.getDb().getName()).isEqualTo("fund_allocation_test_" + TEST_DATABASE);
@@ -84,6 +87,149 @@ class ReplicaSetAllocationTest {
     automatic(direct, "gmail:direct", 300_000);
     assertThat(payments.findByMemberIdOrderByOccurredAtAscCreatedAtAsc(direct.id)).hasSize(1);
     assertThat(paidMonths(direct)).hasSize(3);
+  }
+
+  @Test void manualBankReviewCreatesMissingJulyAndAugustBeforeAllocatingFourHundredThousand() throws Exception {
+    MemberDocument target = member("MANUALFOUR");
+    target.baselineMonth = target.contributionStartMonth = "2026-07";
+    target.contributionRates = new ArrayList<>(List.of(new ContributionRate(100_000, "2026-07", null)));
+    members.save(target);
+    due(target, "2026-09", 100_000, 0); due(target, "2026-10", 100_000, 0);
+    BankTransactionDocument bank = pendingManualBank("manual-four", 400_000);
+    var request = new com.fundmanagement.api.dto.ApiDtos.ReconciliationReviewRequest(false, target.id, "synthetic review");
+    var result = reconciliationService.review(bank.id, request, "test-admin");
+    assertThat(result.matchedDuePeriodIds()).hasSize(4);
+    assertThat(result.matchMethod()).isEqualTo("MANUAL");
+    assertThat(result.conflictReason()).isNull();
+    assertThat(result.matchCandidates()).isEmpty();
+    assertThat(paidMonths(target)).containsExactly("2026-07", "2026-08", "2026-09", "2026-10");
+    assertThat(dues.findByMemberIdOrderByMonthAsc(target.id)).hasSize(8);
+    assertThat(payments.findAll()).singleElement().satisfies(p -> {
+      assertThat(p.amount).isEqualTo(400_000); assertThat(p.unallocatedAmount).isZero();
+      assertThat(p.allocations).hasSize(4);
+    });
+    String committed = snapshot();
+    reconciliationService.review(bank.id, request, "test-admin");
+    assertThat(snapshot()).isEqualTo(committed);
+    assertThatThrownBy(() -> reconciliationService.review(bank.id,
+        new com.fundmanagement.api.dto.ApiDtos.ReconciliationReviewRequest(true, null, null), "test-admin"))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(snapshot()).isEqualTo(committed);
+  }
+
+  @Test void legacyMatchedReviewClearsStaleLabelsWithoutReallocatingOrRecordingAnotherPayment() throws Exception {
+    MemberDocument target = legacyFixture();
+    BankTransactionDocument bank = banks.findAll().getFirst();
+    bank.conflictReason = "NO_MEMBER_IDENTIFIER"; banks.save(bank);
+    String ledger = mapper.writeValueAsString(List.of(dues.findAll(), payments.findAll()));
+    var request = new com.fundmanagement.api.dto.ApiDtos.ReconciliationReviewRequest(false, target.id, "metadata only");
+    var result = reconciliationService.review(bank.id, request, "test");
+    assertThat(result.matchMethod()).isEqualTo("MANUAL"); assertThat(result.conflictReason()).isNull();
+    assertThat(result.matchedDuePeriodIds()).isEqualTo(bank.matchedDuePeriodIds);
+    assertThat(mapper.writeValueAsString(List.of(dues.findAll(), payments.findAll()))).isEqualTo(ledger);
+    assertThat(audits.findAll()).singleElement().satisfies(a ->
+        assertThat(a.action).isEqualTo("BANK_TRANSACTION_REVIEW_METADATA_CORRECTED"));
+    String committed = snapshot();
+    reconciliationService.review(bank.id, request, "test");
+    assertThat(snapshot()).isEqualTo(committed);
+  }
+
+  @Test void manualPaymentConsumesOlderCreditBeforeTheNewPayment() {
+    MemberDocument target = legacyFixture();
+    var result = paymentService.record(new com.fundmanagement.api.dto.ApiDtos.ManualPaymentRequest(
+        target.id, 100_000, Instant.parse("2026-10-23T03:45:00Z"), "manual-new-credit", "synthetic"), "test");
+    assertThat(result.unallocatedAmount()).isZero();
+    assertThat(paidMonths(target)).containsExactly("2026-08", "2026-09", "2026-10", "2026-11");
+    ManualPaymentDocument old = payments.findByIdempotencyKey("gmail:synthetic-target").orElseThrow();
+    assertThat(old.unallocatedAmount).isZero(); assertThat(old.allocations).hasSize(3);
+    assertThat(banks.findAll()).singleElement().satisfies(b -> assertThat(b.matchedDuePeriodIds).hasSize(3));
+    String november = dues.findByMemberIdAndMonth(target.id, "2026-11").orElseThrow().id;
+    assertThat(result.allocations()).extracting(com.fundmanagement.api.dto.ApiDtos.AllocationResponse::duePeriodId)
+        .containsExactly(november);
+  }
+
+  @Test void retryReloadsAnExistingPaymentAfterItsCreditIsConsumedAndUsesItsStoredDate() {
+    MemberDocument target = legacyFixture();
+    var result = paymentService.record(new com.fundmanagement.api.dto.ApiDtos.ManualPaymentRequest(
+        target.id, 300_000, Instant.parse("2027-01-01T00:00:00Z"), "gmail:synthetic-target", "retry"), "test");
+    assertThat(result.unallocatedAmount()).isZero(); assertThat(result.allocations()).hasSize(3);
+    assertThat(paidMonths(target)).containsExactly("2026-08", "2026-09", "2026-10");
+    assertThat(dues.findByMemberIdOrderByMonthAsc(target.id)).hasSize(7);
+    assertThat(payments.findAll()).singleElement().satisfies(p -> assertThat(p.amount).isEqualTo(300_000));
+  }
+
+  @Test void manualFifoStillPaysExistingPriorYearDebtFirst() {
+    MemberDocument target = member("MANUALOLDDEBT");
+    target.baselineMonth = target.contributionStartMonth = "2025-08";
+    target.contributionRates = new ArrayList<>(List.of(new ContributionRate(100_000, "2025-08", null)));
+    members.save(target); due(target, "2025-12", 100_000, 0);
+    paymentService.record(new com.fundmanagement.api.dto.ApiDtos.ManualPaymentRequest(target.id,
+        200_000, Instant.parse("2026-10-23T03:45:00Z"), "manual-prior-year", "synthetic"), "test");
+    assertThat(paidMonths(target)).containsExactly("2025-12", "2026-01");
+    assertThat(payments.findAll()).singleElement().satisfies(p -> assertThat(p.unallocatedAmount).isZero());
+  }
+
+  @Test void manualPaymentUsesVietnamCalendarYearAtNewYearBoundary() {
+    MemberDocument target = member("MANUALNEWYEAR");
+    target.baselineMonth = target.contributionStartMonth = "2026-01";
+    target.contributionRates = new ArrayList<>(List.of(new ContributionRate(100_000, "2026-01", null)));
+    members.save(target);
+    paymentService.record(new com.fundmanagement.api.dto.ApiDtos.ManualPaymentRequest(target.id,
+        100_000, Instant.parse("2025-12-31T18:00:00Z"), "manual-new-year-01", "synthetic"), "test");
+    assertThat(paidMonths(target)).containsExactly("2026-01");
+  }
+
+  @Test void failedManualBankAuditRollsBackPlanPaymentAndBankLinkTogether() throws Exception {
+    MemberDocument target = member("MANUALROLLBACK");
+    BankTransactionDocument bank = pendingManualBank("manual-rollback", 400_000);
+    AuditService failingAudit = org.mockito.Mockito.spy(mongoAudit());
+    org.mockito.Mockito.doThrow(new IllegalStateException("synthetic bank audit failure"))
+        .when(failingAudit).record(org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.eq("BANK_TRANSACTION_MATCHED"), org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.anyMap());
+    NotificationService notifications = org.mockito.Mockito.mock(NotificationService.class);
+    ReconciliationService service = new ReconciliationService(banks, ingestionService, paymentService,
+        failingAudit, memberService, notifications);
+    service.setFinancialTransactions(transactions);
+    String before = snapshot();
+    assertThatThrownBy(() -> service.review(bank.id,
+        new com.fundmanagement.api.dto.ApiDtos.ReconciliationReviewRequest(false, target.id, "synthetic"), "test"))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("synthetic bank audit failure");
+    assertThat(snapshot()).isEqualTo(before);
+    org.mockito.Mockito.verifyNoInteractions(notifications);
+  }
+
+  @Test void concurrentManualReviewsCannotAssignOneBankTransactionToTwoMembers() throws Exception {
+    MemberDocument first = member("REVIEWFIRST"); MemberDocument second = member("REVIEWSECOND");
+    BankTransactionDocument bank = pendingManualBank("manual-competing", 400_000);
+    try (var workers = Executors.newFixedThreadPool(2)) {
+      CountDownLatch start = new CountDownLatch(1);
+      List<Future<Boolean>> results = new ArrayList<>();
+      for (MemberDocument target : List.of(first, second)) results.add(workers.submit(() -> {
+        start.await();
+        try {
+          reconciliationService.review(bank.id, new com.fundmanagement.api.dto.ApiDtos.ReconciliationReviewRequest(
+              false, target.id, "synthetic"), "test"); return true;
+        } catch (IllegalStateException rejected) { return false; }
+      }));
+      start.countDown();
+      assertThat(List.of(results.get(0).get(30, TimeUnit.SECONDS), results.get(1).get(30, TimeUnit.SECONDS)))
+          .containsExactlyInAnyOrder(true, false);
+    }
+    BankTransactionDocument matched = banks.findById(bank.id).orElseThrow();
+    assertThat(payments.findAll()).singleElement().satisfies(p -> {
+      assertThat(p.memberId).isEqualTo(matched.matchedMemberId);
+      assertThat(p.amount).isEqualTo(400_000); assertThat(p.unallocatedAmount).isZero();
+    });
+    String losingMember = matched.matchedMemberId.equals(first.id) ? second.id : first.id;
+    assertThat(dues.findByMemberIdOrderByMonthAsc(losingMember)).isEmpty();
+  }
+
+  private BankTransactionDocument pendingManualBank(String provider, long amount) {
+    BankTransactionDocument bank = new BankTransactionDocument(); bank.providerMessageId = provider;
+    bank.occurredAt = Instant.parse("2026-10-23T03:45:00Z"); bank.amount = amount; bank.direction = "IN";
+    bank.reconciliationStatus = "NEEDS_REVIEW"; bank.conflictReason = "NO_MEMBER_IDENTIFIER";
+    return banks.insert(bank);
   }
 
   @Test void previewsAndRepairsOnlyTargetCreditWithoutChangingIncomeOrExistingPayments() throws Exception {

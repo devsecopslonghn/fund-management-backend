@@ -42,10 +42,28 @@ public class PaymentService {
     return atomic(() -> recordInternal(request, actor));
   }
   private ApiDtos.ManualPaymentResponse recordInternal(ApiDtos.ManualPaymentRequest request, String actor) {
-    MemberDocument member = members.get(request.memberId()); ManualPaymentDocument payment = payments.findByIdempotencyKey(request.idempotencyKey()).orElseGet(() -> createPayment(request, actor));
-    if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
-    if (!payment.memberId.equals(member.id) || payment.amount != request.amount()) throw new IllegalStateException("Idempotency key was already used for a different payment");
+    MemberDocument member = members.get(request.memberId());
+    ManualPaymentDocument existing = payments.findByIdempotencyKey(request.idempotencyKey()).orElse(null);
+    if (existing != null) validateManualPayment(existing, member.id, request.amount());
+    if (annualPlans != null) {
+      // A manually reviewed payment has no annual reference. Materialize its
+      // recorded calendar year, while retaining member-wide FIFO for old debt.
+      Instant occurredAt = existing == null ? request.occurredAt() : existing.occurredAt;
+      int year = occurredAt.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).getYear();
+      annualPlans.ensureYear(member, year, actor);
+      allocateMemberCredits(member.id, year, actor);
+    }
+    // Credit allocation may have updated an existing payment. Reload it before
+    // continuing so an idempotent review cannot overwrite those allocations.
+    ManualPaymentDocument payment = payments.findByIdempotencyKey(request.idempotencyKey())
+        .orElseGet(() -> createPayment(request, actor));
+    validateManualPayment(payment, member.id, request.amount());
     applyOutstanding(payment, null); updateIntentStatuses(member.id); payment.recordedBy = actor; payments.save(payment); audit.record(actor, "MANUAL_PAYMENT_RECORDED", "manual_payment", payment.id, Map.of(), Map.of("memberId", member.id, "amount", payment.amount, "unallocatedAmount", payment.unallocatedAmount)); return toResponse(payment);
+  }
+  private void validateManualPayment(ManualPaymentDocument payment, String memberId, long amount) {
+    if (payment.reversed) throw new IllegalStateException("Payment has been reversed");
+    if (!payment.memberId.equals(memberId) || payment.amount != amount) throw new IllegalStateException("Idempotency key was already used for a different payment");
+    if ("INTENT".equals(payment.allocationMode)) throw new IllegalStateException("Payment belongs to an explicit intent");
   }
   /** Automatic bank reconciliation path. Annual references constrain allocation to that calendar year. */
   public ApiDtos.ManualPaymentResponse recordAutomatic(String memberId, long amount, Instant occurredAt, String idempotencyKey, Integer year, String actor) {

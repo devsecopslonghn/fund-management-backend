@@ -643,6 +643,16 @@ A scoped operational procedure and local replica-set test instructions are in
 [the repair runbook](docs/member-dues-repair.md). Deployment and any live repair
 remain separately authorized operational actions.
 
+Manual payment entry and manual bank review also materialize the payment's
+recorded calendar year in `Asia/Ho_Chi_Minh` before allocating. Existing older
+debt remains first in member-wide FIFO order. Retries use the stored payment
+date and reload any payment updated by credit allocation. Manual bank review
+commits dues, payment, bank linkage and audit atomically; a repeated review
+cannot move the transaction to another member or ignore an already matched
+payment. Successful manual reviews clear stale matching warnings. Repeating
+an old manual match can correct only its warning metadata, with an audit,
+without changing allocations or creating another payment.
+
 ### Runtime security baseline
 
 The backend uses Spring Boot 4.0.8 / Spring Framework 7.0.9 and Springdoc 3.0.3.
